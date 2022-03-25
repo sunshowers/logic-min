@@ -1038,7 +1038,7 @@ mod tests {
         ])
         .unwrap();
         let actual = cube_set.simplify_basic();
-        println!("{:?}", actual);
+        println!("ACTUAL: {:?}", actual);
         println!("{}", actual.cube_count());
     }
 }
