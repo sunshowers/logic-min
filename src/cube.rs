@@ -87,6 +87,20 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         Self { input, output }
     }
 
+    pub fn evaluate(&self, values: &[bool; IL]) -> bool {
+        for (variable, value) in self.input.iter().zip(values.iter()) {
+            match (variable, value) {
+                (Some(v), value) => {
+                    if v != value {
+                        return false;
+                    }
+                }
+                (None, _) => {}
+            }
+        }
+        true
+    }
+
     pub fn contains(&self, other: &Cube<IL, OL>) -> bool {
         let input_contains = self
             .input
@@ -515,6 +529,26 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
+    }
+
+    pub fn evaluate(&self, values: &[bool; IL]) -> bool {
+        self.elements.iter().any(|elem| elem.evaluate(values))
+    }
+
+    pub fn check_logically_equivalent(&self, other: &Self) -> Result<(), [bool; IL]> {
+        // Iterate over all possible (false, true) combinations.
+        for input_bits in 0..2_u32.pow(IL as u32) {
+            let mut values = [false; IL];
+            for bit in 0..IL {
+                if (input_bits >> bit) & 1 == 1 {
+                    values[bit] = true;
+                }
+            }
+            if self.evaluate(&values) != other.evaluate(&values) {
+                return Err(values);
+            }
+        }
+        Ok(())
     }
 
     pub fn is_cover(&self, c: &Cube<IL, OL>) -> bool {
@@ -1015,12 +1049,12 @@ mod tests {
         // input_ix 0 is the only binate variable.
         let (cube_set, max_binate_ix) = cube_set.make_unate_with_binate_select().unwrap_err();
         assert_eq!(max_binate_ix, 0, "only binate variable");
+        let actual = cube_set.simplify_basic();
 
-        assert_eq!(
-            cube_set.simplify_basic(),
-            expected,
-            "basic simplification works"
-        );
+        assert_eq!(actual, expected, "basic simplification works");
+        actual
+            .check_logically_equivalent(&expected)
+            .expect("check logical equivalence");
 
         let cube_set = CubeSet::from_numeric([
             ([2, 0, 0, 0, 2, 0], []),
@@ -1040,5 +1074,19 @@ mod tests {
         let actual = cube_set.simplify_basic();
         println!("ACTUAL: {:?}", actual);
         println!("{}", actual.cube_count());
+
+        let expected = CubeSet::from_numeric([
+            ([1, 1, 2, 2, 2, 1], []),
+            ([2, 1, 2, 1, 2, 2], []),
+            ([2, 1, 2, 2, 0, 1], []),
+            ([2, 1, 0, 2, 2, 2], []),
+            ([0, 0, 1, 2, 1, 2], []),
+            ([1, 0, 2, 0, 2, 2], []),
+            ([1, 2, 1, 2, 2, 1], []),
+            ([2, 2, 0, 0, 2, 2], []),
+        ])
+        .unwrap();
+
+        println!("{:?}", actual.check_logically_equivalent(&expected));
     }
 }
