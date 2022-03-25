@@ -1071,6 +1071,23 @@ mod tests {
             ([1, 1, 2, 1, 2, 1], []),
         ])
         .unwrap();
+
+        let expected_positive_shannon = CubeSet::from_numeric([
+            ([1, 2, 1, 2, 2, 1], []),
+            ([0, 2, 2, 1, 2, 2], []),
+            ([2, 2, 2, 2, 0, 1], []),
+            ([2, 2, 0, 0, 2, 1], []),
+            ([2, 2, 0, 0, 2, 0], []),
+            ([1, 2, 2, 1, 2, 0], []),
+            ([1, 2, 2, 1, 2, 1], []),
+        ])
+        .unwrap();
+        let shannon = cube_set.shannon_expansion(1);
+        assert_eq!(
+            shannon.positive, expected_positive_shannon,
+            "positive shannon matches"
+        );
+
         let actual = cube_set.simplify_basic();
         println!("ACTUAL: {:?}", actual);
         println!("{}", actual.cube_count());
