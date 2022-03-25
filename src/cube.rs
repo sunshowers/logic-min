@@ -15,6 +15,18 @@ pub struct Cube<const IL: usize, const OL: usize> {
     pub output: [bool; OL],
 }
 
+impl<const IL: usize> Cube<IL, 0> {
+    #[inline]
+    pub fn new0(input: [Option<bool>; IL]) -> Self {
+        Self { input, output: [] }
+    }
+
+    #[inline]
+    pub fn from_numeric0(input_numeric: [u8; IL]) -> Result<Self, InvalidCubeNumeric> {
+        Self::from_numeric(input_numeric, [])
+    }
+}
+
 impl<const IL: usize, const OL: usize> Cube<IL, OL> {
     pub const INPUT_LEN: usize = IL;
     pub const OUTPUT_LEN: usize = OL;
@@ -87,20 +99,6 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         Self { input, output }
     }
 
-    pub fn evaluate(&self, values: &[bool; IL]) -> bool {
-        for (variable, value) in self.input.iter().zip(values.iter()) {
-            match (variable, value) {
-                (Some(v), value) => {
-                    if v != value {
-                        return false;
-                    }
-                }
-                (None, _) => {}
-            }
-        }
-        true
-    }
-
     pub fn contains(&self, other: &Cube<IL, OL>) -> bool {
         let input_contains = self
             .input
@@ -135,10 +133,10 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
             .zip(&other.input)
             .all(|(&c, &d)| process_contains(CubeContains::input_contains(c, d)));
 
-        println!(
-            "*** *** *** input {:?} contains {:?}: {}",
-            self, other, input_contains
-        );
+        // println!(
+        //     "*** *** *** input {:?} contains {:?}: {}",
+        //     self, other, input_contains
+        // );
 
         let output_contains = self
             .output
@@ -276,6 +274,22 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         let output = unsafe { output.into_inner_unchecked() };
 
         Some(Self { input, output })
+    }
+}
+
+impl<const IL: usize> Cube<IL, 0> {
+    pub fn evaluate0(&self, values: &[bool; IL]) -> bool {
+        for (variable, value) in self.input.iter().zip(values.iter()) {
+            match (variable, value) {
+                (Some(v), value) => {
+                    if v != value {
+                        return false;
+                    }
+                }
+                (None, _) => {}
+            }
+        }
+        true
     }
 }
 
@@ -493,7 +507,22 @@ pub struct CubeSet<const IL: usize, const OL: usize> {
     pub elements: BTreeSet<Cube<IL, OL>>,
 }
 
+impl<const IL: usize> CubeSet<IL, 0> {
+    pub fn from_numeric0(
+        numeric: impl IntoIterator<Item = [u8; IL]>,
+    ) -> Result<Self, InvalidCubeNumeric> {
+        let elements = numeric
+            .into_iter()
+            .map(|input| Cube::from_numeric0(input))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { elements })
+    }
+}
+
 impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
+    pub const INPUT_LEN: usize = IL;
+    pub const OUTPUT_LEN: usize = OL;
+
     pub fn new(elements: impl IntoIterator<Item = Cube<IL, OL>>) -> Self {
         Self {
             elements: elements.into_iter().collect(),
@@ -529,28 +558,97 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
         self.elements.is_empty()
     }
 
-    pub fn evaluate(&self, values: &[bool; IL]) -> bool {
-        self.elements.iter().any(|elem| elem.evaluate(values))
+    #[inline]
+    pub fn try_into_cubeset0(self) -> Result<CubeSet<IL, 0>, CubeSet<IL, OL>> {
+        if OL == 0 {
+            // SAFETY: `BTreeSet<IL, 0>` has exactly the same layout as `BTreeSet<IL, OL>` when OL
+            // == 0
+            Ok(unsafe { std::mem::transmute::<CubeSet<IL, OL>, CubeSet<IL, 0>>(self) })
+        } else {
+            Err(self)
+        }
+    }
+
+    #[inline]
+    pub fn try_as_cubeset0(&self) -> Option<&CubeSet<IL, 0>> {
+        if OL == 0 {
+            // SAFETY: `BTreeSet<IL, 0>` has exactly the same layout as `BTreeSet<IL, OL>` when OL
+            // == 0
+            Some(unsafe { std::mem::transmute::<&CubeSet<IL, OL>, &CubeSet<IL, 0>>(self) })
+        } else {
+            None
+        }
+    }
+
+    /// Returns the part of this [`CubeSet`] which resolves to true for the given input.
+    pub fn output_component(&self, output_ix: usize) -> impl Iterator<Item = Cube<IL, 0>> + '_ {
+        assert!(
+            output_ix < OL,
+            "output ix {} must be in range 0..{}",
+            output_ix,
+            OL
+        );
+        self.elements
+            .iter()
+            .filter_map(move |elem| elem.output[output_ix].then(|| Cube::new0(elem.input)))
+    }
+
+    /// Returns the result of evaluating all the output values against the input value.
+    ///
+    /// Panics if `OL == 0`. Use `evaluate0` to get a true/false answer when OL == 0.
+    pub fn evaluate(&self, values: &[bool; IL]) -> [bool; OL] {
+        assert_ne!(
+            OL, 0,
+            "output length {} must not be 0 -- use evaluate0 to get an answer when it is 0",
+            OL
+        );
+        let mut res = [false; OL];
+        for output_ix in 0..OL {
+            res[output_ix] = self
+                .output_component(output_ix)
+                .any(|elem| elem.evaluate0(values));
+        }
+
+        res
+    }
+
+    pub fn is_tautology(&self) -> bool {
+        // TODO: unate reduction/component reduction
+        match self.try_as_cubeset0() {
+            Some(cube_set0) => cube_set0.is_tautology0(),
+            None => {
+                // Check that each output component is tautological.
+                for output_ix in 0..OL {
+                    let component = CubeSet::new(self.output_component(output_ix));
+                    if !component.is_tautology0() {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
     }
 
     pub fn check_logically_equivalent(&self, other: &Self) -> Result<(), [bool; IL]> {
-        // Iterate over all possible (false, true) combinations.
-        for input_bits in 0..2_u32.pow(IL as u32) {
-            let mut values = [false; IL];
-            for bit in 0..IL {
-                if (input_bits >> bit) & 1 == 1 {
-                    values[bit] = true;
+        match (self.try_as_cubeset0(), other.try_as_cubeset0()) {
+            (Some(self0), Some(other0)) => self0.check_logically_equivalent0(other0),
+            (None, None) => {
+                // TODO: benchmark against breaking up separately
+                for input_bits in 0..2_u32.pow(IL as u32) {
+                    let mut values = [false; IL];
+                    for bit in 0..IL {
+                        if (input_bits >> bit) & 1 == 1 {
+                            values[bit] = true;
+                        }
+                    }
+                    if self.evaluate(&values) != other.evaluate(&values) {
+                        return Err(values);
+                    }
                 }
+                Ok(())
             }
-            if self.evaluate(&values) != other.evaluate(&values) {
-                return Err(values);
-            }
+            _ => unreachable!("self and other have the same OL so this isn't possible"),
         }
-        Ok(())
-    }
-
-    pub fn is_cover(&self, c: &Cube<IL, OL>) -> bool {
-        unimplemented!("need to implement minterms first")
     }
 
     #[inline]
@@ -645,6 +743,16 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
         }
     }
 
+    pub fn consensus(&self, other: &Self) -> Self {
+        let elements = self
+            .elements
+            .iter()
+            .cartesian_product(&other.elements)
+            .filter_map(|(c, d)| c.consensus(d))
+            .collect();
+        Self { elements }
+    }
+
     // ---
     // Helper methods
     // ---
@@ -680,6 +788,81 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
         other.elements.retain(|p| !result.contains(p));
 
         Self { elements: result }
+    }
+}
+
+impl<const IL: usize> CubeSet<IL, 0> {
+    pub fn evaluate0(&self, values: &[bool; IL]) -> bool {
+        self.elements.iter().any(|elem| elem.evaluate0(values))
+    }
+
+    pub fn check_logically_equivalent0(&self, other: &Self) -> Result<(), [bool; IL]> {
+        // Iterate over all possible (false, true) combinations.
+        for input_bits in 0..2_u32.pow(IL as u32) {
+            let mut values = [false; IL];
+            for bit in 0..IL {
+                if (input_bits >> bit) & 1 == 1 {
+                    values[bit] = true;
+                }
+            }
+            if self.evaluate0(&values) != other.evaluate0(&values) {
+                return Err(values);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_tautology0(&self) -> bool {
+        // The empty cube is not a tautology.
+        if self.elements.is_empty() {
+            return false;
+        }
+
+        // The tautological cube is present in this cube set.
+        if self.elements.contains(&Cube::total_universe()) {
+            return true;
+        }
+
+        // There's a column of all 1s or all 0s.
+        'outer: for input_ix in 0..IL {
+            let mut any_0s = false;
+            let mut any_1s = false;
+            for elem in &self.elements {
+                match elem.input[input_ix] {
+                    Some(true) => {
+                        any_1s = true;
+                    }
+                    Some(false) => {
+                        any_0s = true;
+                    }
+                    None => {
+                        // There's a don't care in this column.
+                        continue 'outer;
+                    }
+                }
+            }
+
+            // The cube set should have both 0s and 1s.
+            if !(any_0s && any_1s) {
+                return false;
+            }
+        }
+
+        // TODO: deficient vertex count.
+
+        // TODO: splitting and reduction -- this is just a truth table search for now.
+        for input_bits in 0..2_u32.pow(IL as u32) {
+            let mut values = [false; IL];
+            for bit in 0..IL {
+                if (input_bits >> bit) & 1 == 1 {
+                    values[bit] = true;
+                }
+            }
+            if !self.evaluate0(&values) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -969,6 +1152,51 @@ mod tests {
         let total_universe = Cube::<3, 2>::total_universe();
 
         assert!(total_universe.contains(&universe));
+    }
+
+    #[test]
+    fn test_tautology() {
+        let all_twos = CubeSet::from_numeric0([[2, 2, 2]]).unwrap();
+        assert!(all_twos.is_tautology(), "all twos is tautological");
+
+        let all_twos_multi = CubeSet::from_numeric([([2, 2, 2], [4, 4])]).unwrap();
+        assert!(
+            all_twos_multi.is_tautology(),
+            "all twos multi is tautological"
+        );
+
+        let all_twos_multi2 =
+            CubeSet::from_numeric([([2, 2, 2], [4, 3]), ([2, 2, 2], [3, 4])]).unwrap();
+        assert!(
+            all_twos_multi2.is_tautology(),
+            "all twos multi2 is tautological"
+        );
+
+        let all_zeroes_column = CubeSet::from_numeric0([[0, 1, 2], [0, 2, 1]]).unwrap();
+        assert!(
+            !all_zeroes_column.is_tautology(),
+            "column with all zeroes is not tautological"
+        );
+
+        let all_ones_column = CubeSet::from_numeric0([[2, 1, 1], [1, 2, 1]]).unwrap();
+        assert!(
+            !all_ones_column.is_tautology(),
+            "column with all ones is not tautological"
+        );
+
+        let all_zeroes_column_multi =
+            CubeSet::from_numeric([([0, 1, 2], [4, 4]), ([0, 2, 1], [4, 4])]).unwrap();
+        assert!(
+            !all_zeroes_column_multi.is_tautology(),
+            "column with all zeroes (multi) is not tautological"
+        );
+
+        let all_zeroes_column_multi2 =
+            CubeSet::from_numeric([([2, 1, 0], [4, 3]), ([1, 2, 0], [3, 4])]).unwrap();
+        assert!(
+            !all_zeroes_column_multi2.is_tautology(),
+            "column with all zeroes (multi2) is not tautological"
+        );
     }
 
     #[test]
