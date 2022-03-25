@@ -3,10 +3,13 @@
 
 use crate::errors::InvalidCubeNumeric;
 use arrayvec::ArrayVec;
-use smallvec::SmallVec;
-use std::ops::BitAnd;
+use itertools::Itertools;
+use std::{
+    collections::BTreeSet,
+    ops::{BitAnd, BitOr, Mul, Not},
+};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Cube<const IL: usize, const OL: usize> {
     pub input: [Option<bool>; IL],
     pub output: [bool; OL],
@@ -196,13 +199,84 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
             _ => None,
         }
     }
+
+    pub fn is_implicant_of(&self, cube_set: &CubeSet<IL, OL>) -> bool {
+        (self & cube_set).is_empty()
+    }
+
+    pub fn cofactor(&self, p: &Self) -> Option<Self> {
+        // page 30
+        let mut input: ArrayVec<Option<bool>, IL> = ArrayVec::new();
+        let mut output: ArrayVec<bool, OL> = ArrayVec::new();
+
+        for (&self_k, &p_k) in self.input.iter().zip(&p.input) {
+            if intersect_input_one(self_k, p_k).is_phi() {
+                return None;
+            }
+            match p_k {
+                Some(_) => input.push(None),
+                None => input.push(self_k),
+            }
+        }
+
+        for (&self_k, &p_k) in self.output.iter().zip(&p.output) {
+            output.push((!p_k) || self_k);
+        }
+
+        // SAFETY: we push exactly as many as IL or OL
+        debug_assert_eq!(input.len(), input.capacity());
+        let input = unsafe { input.into_inner_unchecked() };
+        debug_assert_eq!(output.len(), output.capacity());
+        let output = unsafe { output.into_inner_unchecked() };
+
+        Some(Self { input, output })
+    }
 }
 
+/// Complement operation.
+impl<const IL: usize, const OL: usize> Not for Cube<IL, OL> {
+    type Output = Cube<IL, OL>;
+
+    fn not(self) -> Self::Output {
+        self.complement_impl()
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> Not for &'a Cube<IL, OL> {
+    type Output = Cube<IL, OL>;
+
+    fn not(self) -> Self::Output {
+        self.complement_impl()
+    }
+}
+
+impl<const IL: usize, const OL: usize> Cube<IL, OL> {
+    fn complement_impl(&self) -> Self {
+        // Only the input is complemented.
+        let input: ArrayVec<Option<bool>, IL> = self
+            .input
+            .iter()
+            .map(|&c| match c {
+                Some(x) => Some(!x),
+                None => None,
+            })
+            .collect();
+
+        debug_assert_eq!(input.len(), input.capacity());
+        let input = unsafe { input.into_inner_unchecked() };
+        Self {
+            input,
+            output: self.output,
+        }
+    }
+}
+
+/// Intersection operation.
 impl<const IL: usize, const OL: usize> BitAnd for Cube<IL, OL> {
     type Output = Option<Cube<IL, OL>>;
 
     fn bitand(self, rhs: Self) -> Self::Output {
-        bitand_impl(&self, &rhs)
+        intersection_impl(&self, &rhs)
     }
 }
 
@@ -210,7 +284,7 @@ impl<'a, const IL: usize, const OL: usize> BitAnd<&'a Cube<IL, OL>> for Cube<IL,
     type Output = Option<Cube<IL, OL>>;
 
     fn bitand(self, rhs: &'a Cube<IL, OL>) -> Self::Output {
-        bitand_impl(&self, rhs)
+        intersection_impl(&self, rhs)
     }
 }
 
@@ -218,11 +292,49 @@ impl<'a, 'b, const IL: usize, const OL: usize> BitAnd<&'a Cube<IL, OL>> for &'b 
     type Output = Option<Cube<IL, OL>>;
 
     fn bitand(self, rhs: &'a Cube<IL, OL>) -> Self::Output {
-        bitand_impl(self, rhs)
+        intersection_impl(self, rhs)
     }
 }
 
-fn bitand_impl<const IL: usize, const OL: usize>(
+impl<'a, const IL: usize, const OL: usize> BitAnd<&'a CubeSet<IL, OL>> for Cube<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: &'a CubeSet<IL, OL>) -> Self::Output {
+        self.intersect_cube_set_impl(rhs)
+    }
+}
+
+impl<'a, 'b, const IL: usize, const OL: usize> BitAnd<&'a CubeSet<IL, OL>> for &'b Cube<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: &'a CubeSet<IL, OL>) -> Self::Output {
+        self.intersect_cube_set_impl(rhs)
+    }
+}
+
+impl<const IL: usize, const OL: usize> BitAnd<CubeSet<IL, OL>> for Cube<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: CubeSet<IL, OL>) -> Self::Output {
+        self.intersect_cube_set_impl(&rhs)
+    }
+}
+
+impl<'b, const IL: usize, const OL: usize> BitAnd<CubeSet<IL, OL>> for &'b Cube<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: CubeSet<IL, OL>) -> Self::Output {
+        self.intersect_cube_set_impl(&rhs)
+    }
+}
+
+impl<const IL: usize, const OL: usize> Cube<IL, OL> {
+    fn intersect_cube_set_impl(&self, cube_set: &CubeSet<IL, OL>) -> CubeSet<IL, OL> {
+        CubeSet::new(cube_set.elements.iter().filter_map(|c| self & c))
+    }
+}
+
+fn intersection_impl<const IL: usize, const OL: usize>(
     a: &Cube<IL, OL>,
     b: &Cube<IL, OL>,
 ) -> Option<Cube<IL, OL>> {
@@ -311,13 +423,209 @@ impl CubeContains {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CubeSet<const IL: usize, const OL: usize> {
-    elements: SmallVec<[Cube<IL, OL>; 4]>,
+    pub elements: BTreeSet<Cube<IL, OL>>,
+}
+
+impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
+    pub fn new(elements: impl IntoIterator<Item = Cube<IL, OL>>) -> Self {
+        Self {
+            elements: elements.into_iter().collect(),
+        }
+    }
+
+    pub fn from_numeric(
+        numeric: impl IntoIterator<Item = ([u8; IL], [u8; OL])>,
+    ) -> Result<Self, InvalidCubeNumeric> {
+        let elements = numeric
+            .into_iter()
+            .map(|(input, output)| Cube::from_numeric(input, output))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { elements })
+    }
+
+    pub fn cofactor(&self, p: &Cube<IL, OL>) -> Self {
+        let elements = self
+            .elements
+            .iter()
+            .filter_map(|elem| elem.cofactor(p))
+            .collect();
+        Self { elements }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    pub fn is_cover(&self, c: &Cube<IL, OL>) -> bool {
+        unimplemented!("need to implement minterms first")
+    }
+
+    pub fn shannon_expansion(&self, p: &Cube<IL, OL>) -> Self {
+        (p & self.cofactor(p)) | (!p & self.cofactor(&!p))
+    }
+
+    /// Given two subcovers self and other, obtained by the Shannon expansion with
+    /// respect to a cube p, computes a cover by merging them.
+    pub fn merge_with_identity(mut self, mut other: Self, p: &Cube<IL, OL>) -> Self {
+        let result = self.intersect_and_remove(&mut other);
+        ((!p) & &self) | (p & &other) | result
+    }
+
+    pub fn merge_with_containment(mut self, mut other: Self, _p: &Cube<IL, OL>) -> Self {
+        let _result = self.intersect_and_remove(&mut other);
+        unimplemented!("still need to implement containment")
+    }
+
+    pub fn is_monotone_increasing(&self, input_ix: usize) -> bool {
+        assert!(
+            input_ix < IL,
+            "input elem {} must be in range [0..{})",
+            input_ix,
+            IL
+        );
+        self.elements
+            .iter()
+            .all(|elem| elem.input[input_ix] != Some(false))
+    }
+
+    pub fn is_monotone_decreasing(&self, input_ix: usize) -> bool {
+        assert!(
+            input_ix < IL,
+            "input elem {} must be in range [0..{})",
+            input_ix,
+            IL
+        );
+        self.elements
+            .iter()
+            .all(|elem| elem.input[input_ix] != Some(true))
+    }
+
+    pub fn is_unate(&self) -> bool {
+        (0..IL).all(|input_ix| {
+            self.is_monotone_increasing(input_ix) || self.is_monotone_decreasing(input_ix)
+        })
+    }
+
+    // ---
+    // Helper methods
+    // ---
+
+    fn union_impl(&self, other: &Self) -> Self {
+        let elements = self
+            .elements
+            .iter()
+            .chain(&other.elements)
+            .cloned()
+            .collect();
+        Self { elements }
+    }
+
+    fn intersection_impl(&self, other: &Self) -> Self {
+        // page 24
+        let elements = self
+            .elements
+            .iter()
+            .cartesian_product(&other.elements)
+            .filter_map(|(c, d)| (c & d))
+            .collect();
+        Self { elements }
+    }
+
+    fn intersect_and_remove(&mut self, other: &mut Self) -> Self {
+        let result: BTreeSet<_> = self
+            .elements
+            .intersection(&other.elements)
+            .cloned()
+            .collect();
+        self.elements.retain(|p| result.contains(p));
+        other.elements.retain(|p| result.contains(p));
+
+        Self { elements: result }
+    }
+}
+
+impl<const IL: usize, const OL: usize> BitAnd for CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        self.intersection_impl(&rhs)
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> BitAnd<&'a CubeSet<IL, OL>> for CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: &'a CubeSet<IL, OL>) -> Self::Output {
+        self.intersection_impl(rhs)
+    }
+}
+
+impl<'a, 'b, const IL: usize, const OL: usize> BitAnd<&'a CubeSet<IL, OL>> for &'b CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: &'a CubeSet<IL, OL>) -> Self::Output {
+        self.intersection_impl(rhs)
+    }
+}
+
+impl<'b, const IL: usize, const OL: usize> BitAnd<CubeSet<IL, OL>> for &'b CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitand(self, rhs: CubeSet<IL, OL>) -> Self::Output {
+        self.intersection_impl(&rhs)
+    }
+}
+
+impl<const IL: usize, const OL: usize> BitOr for CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        self.union_impl(&rhs)
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> BitOr<&'a CubeSet<IL, OL>> for CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitor(self, rhs: &'a CubeSet<IL, OL>) -> Self::Output {
+        self.union_impl(rhs)
+    }
+}
+
+impl<'a, 'b, const IL: usize, const OL: usize> BitOr<&'a CubeSet<IL, OL>> for &'b CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitor(self, rhs: &'a CubeSet<IL, OL>) -> Self::Output {
+        self.union_impl(rhs)
+    }
+}
+
+impl<'b, const IL: usize, const OL: usize> BitOr<CubeSet<IL, OL>> for &'b CubeSet<IL, OL> {
+    type Output = CubeSet<IL, OL>;
+
+    fn bitor(self, rhs: CubeSet<IL, OL>) -> Self::Output {
+        self.union_impl(&rhs)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_complement() {
+        let cube = Cube::from_numeric([1, 0, 2], [4, 3]).unwrap();
+        let complement = Cube::from_numeric([0, 1, 2], [4, 3]).unwrap();
+        assert_eq!(!cube, complement);
+    }
 
     #[test]
     fn test_minterm() {
@@ -340,5 +648,56 @@ mod tests {
         let total_universe = Cube::<3, 2>::total_universe();
 
         assert!(total_universe.contains(&universe));
+    }
+
+    #[test]
+    fn test_cofactor() {
+        // examples on page 30
+        let cube_set = CubeSet::from_numeric([
+            ([1, 1, 0, 2], [4, 4]),
+            ([0, 1, 2, 0], [4, 4]),
+            ([1, 1, 1, 1], [4, 3]),
+        ])
+        .unwrap();
+        {
+            let p = Cube::from_numeric([1, 1, 2, 2], [4, 3]).unwrap();
+
+            let result =
+                CubeSet::from_numeric([([2, 2, 0, 2], [4, 4]), ([2, 2, 1, 1], [4, 4])]).unwrap();
+
+            assert_eq!(cube_set.cofactor(&p), result);
+        }
+
+        {
+            let p = Cube::from_numeric([2, 2, 2, 1], [4, 4]).unwrap();
+
+            let result =
+                CubeSet::from_numeric([([1, 1, 0, 2], [4, 4]), ([1, 1, 1, 2], [4, 3])]).unwrap();
+
+            assert_eq!(cube_set.cofactor(&p), result);
+
+            let result_complement =
+                CubeSet::from_numeric([([1, 1, 0, 2], [4, 4]), ([0, 1, 2, 2], [4, 4])]).unwrap();
+
+            assert_eq!(cube_set.cofactor(&!(&p)), result_complement);
+
+            let expansion = CubeSet::from_numeric([
+                ([1, 1, 0, 1], [4, 4]),
+                ([1, 1, 0, 0], [4, 4]),
+                ([1, 1, 1, 1], [4, 3]),
+                ([0, 1, 2, 0], [4, 4]),
+            ])
+            .unwrap();
+            assert_eq!(cube_set.shannon_expansion(&p), expansion);
+        }
+    }
+
+    #[test]
+    fn test_is_unate() {
+        let cube_set = CubeSet::from_numeric([([1, 1, 0], [4]), ([2, 0, 2], [4])]).unwrap();
+        assert!(!cube_set.is_unate());
+
+        let cube_set = CubeSet::from_numeric([([1, 2, 0], [4]), ([2, 0, 2], [4])]).unwrap();
+        assert!(cube_set.is_unate());
     }
 }
