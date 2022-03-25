@@ -3,3 +3,6 @@
 
 pub mod cube;
 pub mod errors;
+pub mod logic_function;
+pub mod primes;
+pub mod qm;

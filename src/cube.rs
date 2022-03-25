@@ -269,8 +269,6 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
             output.push((!p_k) || self_k);
         }
 
-        //println!("*** input: {:?}, output: {:?}", input, output);
-
         // SAFETY: we push exactly as many as IL or OL
         debug_assert_eq!(input.len(), input.capacity());
         let input = unsafe { input.into_inner_unchecked() };
@@ -556,17 +554,8 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
     }
 
     #[inline]
-    pub fn shannon_expansion(&self, input_ix: usize) -> ShannonExpansion<IL, OL> {
-        ShannonExpansion::new(self, input_ix, std::convert::identity)
-    }
-
-    #[inline]
-    pub fn shannon_expansion_with_transform(
-        &self,
-        input_ix: usize,
-        transform: impl FnMut(CubeSet<IL, OL>) -> CubeSet<IL, OL>,
-    ) -> ShannonExpansion<IL, OL> {
-        ShannonExpansion::new(self, input_ix, transform)
+    pub fn shannon_expansion(&self, split_ix: usize) -> ShannonExpansion<IL, OL> {
+        ShannonExpansion::new(self, split_ix)
     }
 
     pub fn is_monotone_increasing(&self, input_ix: usize) -> bool {
@@ -598,7 +587,7 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
         UnateCubeSet::new(self)
     }
 
-    pub fn make_unate_with_binate_select(self) -> Result<UnateCubeSet<IL, OL>, (Self, usize)> {
+    pub fn make_unate_or_select_binate(self) -> Result<UnateCubeSet<IL, OL>, (Self, usize)> {
         // Number of cubes with Some(true) in the jth input position.
         let mut ones = [0_u32; IL];
         // Number of cubes with Some(false) in the jth input position.
@@ -636,6 +625,24 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
             .map(|(max_binate_ix, _)| max_binate_ix)
             .expect("there's at least one input");
         Err((self, max_binate_ix))
+    }
+
+    pub fn single_cube_containment(&self) -> Self {
+        let simplified: BTreeSet<_> = self
+            .elements
+            .iter()
+            .filter(|elem| {
+                let contains = self
+                    .elements
+                    .iter()
+                    .any(|contains| contains.strictly_contains(elem));
+                !contains
+            })
+            .cloned()
+            .collect();
+        Self {
+            elements: simplified,
+        }
     }
 
     // ---
@@ -743,15 +750,12 @@ impl<'b, const IL: usize, const OL: usize> BitOr<CubeSet<IL, OL>> for &'b CubeSe
 impl<const IL: usize> CubeSet<IL, 0> {
     /// Basic algorithm to simplify a single-output cube set.
     pub fn simplify_basic(self) -> Self {
-        println!("starting simplification: {:?}", self);
-        match self.make_unate_with_binate_select() {
+        match self.make_unate_or_select_binate() {
             Ok(unate_set) => unate_set.simplify().into_inner(),
             Err((cube_set, max_binate_ix)) => {
                 println!("max binate ix: {}", max_binate_ix);
-                let expansion = cube_set
-                    .shannon_expansion_with_transform(max_binate_ix, |cube_set| {
-                        cube_set.simplify_basic()
-                    });
+                let mut expansion = cube_set.shannon_expansion(max_binate_ix);
+                expansion.transform(|cube_set| cube_set.simplify_basic());
 
                 println!(
                     "expansion: (input ix: {}), {:?}",
@@ -799,6 +803,18 @@ impl<const IL: usize, const OL: usize> UnateCubeSet<IL, OL> {
         })
     }
 
+    /// Simplifies a unate cube set by removing any elements that are contained in other elements.
+    pub fn simplify(&self) -> Self {
+        let inner = self.inner.single_cube_containment();
+        // The monotonicity of the simplified set matches that of the original set.
+        let monotonicity = self.monotonicity;
+
+        Self {
+            inner,
+            monotonicity,
+        }
+    }
+
     #[inline]
     pub fn as_inner(&self) -> &CubeSet<IL, OL> {
         &self.inner
@@ -815,39 +831,6 @@ impl<const IL: usize, const OL: usize> UnateCubeSet<IL, OL> {
     }
 }
 
-impl<const IL: usize> UnateCubeSet<IL, 0> {
-    /// Simplifies a single-variable unate cube set: removes any elements that are contained in
-    /// other elements.
-    pub fn simplify(&self) -> Self {
-        // TODO: use set ordering more intelligently?
-        let simplified: BTreeSet<_> = self
-            .inner
-            .elements
-            .iter()
-            .filter(|elem| {
-                let contains = self
-                    .inner
-                    .elements
-                    .iter()
-                    .any(|contains| contains.strictly_contains(elem));
-                !contains
-            })
-            .cloned()
-            .collect();
-        // The monotonicity of the simplified set matches that of the original set.
-        let monotonicity = self.monotonicity;
-
-        println!("** UNATE SIMPLIFY: {:?}", simplified);
-
-        Self {
-            inner: CubeSet {
-                elements: simplified,
-            },
-            monotonicity,
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Monotonicity {
     Decreasing,
@@ -860,38 +843,61 @@ pub struct ShannonExpansion<const IL: usize, const OL: usize> {
     negative: CubeSet<IL, OL>,
     input_ix: usize,
     // Positive and negative half-spaces.
-    pos_cube: Cube<IL, OL>,
-    neg_cube: Cube<IL, OL>,
+    pos_half_space: Cube<IL, OL>,
+    neg_half_space: Cube<IL, OL>,
 }
 
 impl<const IL: usize, const OL: usize> ShannonExpansion<IL, OL> {
-    pub fn new(
-        cube_set: &CubeSet<IL, OL>,
-        input_ix: usize,
-        mut transform: impl FnMut(CubeSet<IL, OL>) -> CubeSet<IL, OL>,
-    ) -> Self {
-        let pos_cube = Cube::positive_half_space(input_ix);
-        let neg_cube = Cube::negative_half_space(input_ix);
+    pub fn new(cube_set: &CubeSet<IL, OL>, split_ix: usize) -> Self {
+        let pos_half_space = Cube::positive_half_space(split_ix);
+        let neg_half_space = Cube::negative_half_space(split_ix);
 
-        let pos_cofactor = cube_set.cofactor(&pos_cube);
-        let neg_cofactor = cube_set.cofactor(&neg_cube);
-
-        let transformed_pos = (transform)(pos_cofactor);
-        let transformed_neg = (transform)(neg_cofactor);
+        let positive = cube_set.cofactor(&pos_half_space);
+        let negative = cube_set.cofactor(&neg_half_space);
         Self {
-            positive: transformed_pos,
-            negative: transformed_neg,
-            input_ix,
-            pos_cube,
-            neg_cube,
+            positive,
+            negative,
+            input_ix: split_ix,
+            pos_half_space,
+            neg_half_space,
         }
+    }
+
+    #[inline]
+    pub fn positive(&self) -> &CubeSet<IL, OL> {
+        &self.positive
+    }
+
+    #[inline]
+    pub fn negative(&self) -> &CubeSet<IL, OL> {
+        &self.negative
+    }
+
+    pub fn transform(&mut self, mut f: impl FnMut(CubeSet<IL, OL>) -> CubeSet<IL, OL>) {
+        let old_positive = std::mem::replace(&mut self.positive, CubeSet::<IL, OL>::default());
+        self.positive = (f)(old_positive);
+
+        let old_negative = std::mem::replace(&mut self.negative, CubeSet::<IL, OL>::default());
+        self.negative = (f)(old_negative);
+    }
+
+    #[inline]
+    pub fn pos_half_space(&self) -> &Cube<IL, OL> {
+        &self.pos_half_space
+    }
+
+    #[inline]
+    pub fn neg_half_space(&self) -> &Cube<IL, OL> {
+        &self.neg_half_space
     }
 
     /// Given two subcovers self and other, obtained by the Shannon expansion with
     /// respect to a cube p, computes a cover by merging them.
     pub fn merge_with_identity(mut self) -> CubeSet<IL, OL> {
         let intersection = self.positive.intersect_and_remove(&mut self.negative);
-        (&self.pos_cube & &self.positive) | (&self.neg_cube & &self.negative) | intersection
+        (&self.pos_half_space & &self.positive)
+            | (&self.neg_half_space & &self.negative)
+            | intersection
     }
 
     pub fn merge_with_containment(mut self) -> CubeSet<IL, OL> {
@@ -906,25 +912,18 @@ impl<const IL: usize, const OL: usize> ShannonExpansion<IL, OL> {
             self.positive, self.negative, intersection
         );
 
-        let mut new_pos: CubeSet<IL, OL> = Default::default();
-        let mut new_neg: CubeSet<IL, OL> = Default::default();
+        let mut new_pos: CubeSet<IL, OL> = self.positive.clone();
+        let mut new_neg: CubeSet<IL, OL> = self.negative.clone();
 
         for pos_elem in &self.positive.elements {
             for neg_elem in &self.negative.elements {
                 if pos_elem.strictly_contains(neg_elem) {
-                    println!(
-                        "********** strictly contains pos {:?} in neg: {:?}",
-                        pos_elem, neg_elem
-                    );
                     // For some reason rust-analyzer chokes on neg_elem.clone()
                     intersection.elements.insert(Clone::clone(neg_elem));
-                    new_pos.elements.insert(Clone::clone(pos_elem));
+                    new_neg.elements.remove(neg_elem);
                 } else if neg_elem.strictly_contains(pos_elem) {
                     intersection.elements.insert(Clone::clone(pos_elem));
-                    new_neg.elements.insert(Clone::clone(neg_elem));
-                } else {
-                    new_pos.elements.insert(Clone::clone(pos_elem));
-                    new_neg.elements.insert(Clone::clone(neg_elem));
+                    new_pos.elements.remove(pos_elem);
                 }
             }
         }
@@ -934,7 +933,7 @@ impl<const IL: usize, const OL: usize> ShannonExpansion<IL, OL> {
             new_pos, new_neg, intersection
         );
 
-        (&self.pos_cube & new_pos) | (&self.neg_cube & new_neg) | intersection
+        (&self.pos_half_space & new_pos) | (&self.neg_half_space & new_neg) | intersection
     }
 }
 
@@ -1015,11 +1014,13 @@ mod tests {
                 CubeSet::from_numeric([([1, 1, 0, 0], [4, 4]), ([0, 1, 2, 0], [4, 4])]).unwrap();
             let actual = cube_set.shannon_expansion(input_ix);
             assert_eq!(
-                actual.positive, expected_positive,
+                actual.pos_half_space() & actual.positive(),
+                expected_positive,
                 "positive expansion matches"
             );
             assert_eq!(
-                actual.negative, expected_negative,
+                actual.neg_half_space() & actual.negative(),
+                expected_negative,
                 "negative expansion matches"
             );
         }
@@ -1030,13 +1031,13 @@ mod tests {
         {
             let cube_set = CubeSet::from_numeric([([1, 1, 0], [4]), ([2, 0, 2], [4])]).unwrap();
             assert!(cube_set.clone().make_unate().is_err());
-            assert!(matches!(cube_set.make_unate_with_binate_select(), Err((_, x)) if x == 1));
+            assert!(matches!(cube_set.make_unate_or_select_binate(), Err((_, x)) if x == 1));
         }
 
         {
             let cube_set = CubeSet::from_numeric([([1, 2, 0], [4]), ([2, 0, 2], [4])]).unwrap();
             assert!(cube_set.clone().make_unate().is_ok());
-            assert!(cube_set.make_unate_with_binate_select().is_ok());
+            assert!(cube_set.make_unate_or_select_binate().is_ok());
         }
     }
 
@@ -1047,14 +1048,14 @@ mod tests {
         let expected = CubeSet::from_numeric([([2, 1, 2], []), ([0, 2, 2], [])]).unwrap();
 
         // input_ix 0 is the only binate variable.
-        let (cube_set, max_binate_ix) = cube_set.make_unate_with_binate_select().unwrap_err();
+        let (cube_set, max_binate_ix) = cube_set.make_unate_or_select_binate().unwrap_err();
         assert_eq!(max_binate_ix, 0, "only binate variable");
         let actual = cube_set.simplify_basic();
 
         assert_eq!(actual, expected, "basic simplification works");
         actual
             .check_logically_equivalent(&expected)
-            .expect("check logical equivalence");
+            .expect("check logical equivalence for simple problem");
 
         let cube_set = CubeSet::from_numeric([
             ([2, 0, 0, 0, 2, 0], []),
@@ -1084,14 +1085,29 @@ mod tests {
         .unwrap();
         let shannon = cube_set.shannon_expansion(1);
         assert_eq!(
-            shannon.positive, expected_positive_shannon,
+            shannon.positive(),
+            &expected_positive_shannon,
             "positive shannon matches"
         );
 
-        let actual = cube_set.simplify_basic();
-        println!("ACTUAL: {:?}", actual);
-        println!("{}", actual.cube_count());
+        let simplified_positive_shannon = CubeSet::from_numeric([
+            ([1, 2, 2, 2, 2, 1], []),
+            ([2, 2, 2, 1, 2, 2], []),
+            ([2, 2, 2, 2, 0, 1], []),
+            ([2, 2, 0, 2, 2, 2], []),
+        ])
+        .unwrap();
+        let actual = shannon.positive.simplify_basic();
+        assert_eq!(
+            actual, simplified_positive_shannon,
+            "simplified positive shannon matches"
+        );
+        simplified_positive_shannon
+            .check_logically_equivalent(&actual)
+            .expect("check logical equivalence for medium problem");
 
+        // Full problem
+        let actual = cube_set.simplify_basic();
         let expected = CubeSet::from_numeric([
             ([1, 1, 2, 2, 2, 1], []),
             ([2, 1, 2, 1, 2, 2], []),
@@ -1103,7 +1119,9 @@ mod tests {
             ([2, 2, 0, 0, 2, 2], []),
         ])
         .unwrap();
-
-        println!("{:?}", actual.check_logically_equivalent(&expected));
+        assert_eq!(actual, expected, "simplified matches for full problem");
+        actual
+            .check_logically_equivalent(&expected)
+            .expect("check logical equivalence for full problem");
     }
 }
