@@ -3,7 +3,11 @@
 
 use crate::{cover::Cover, errors::InvalidCubeNumeric};
 use arrayvec::ArrayVec;
-use std::ops::{BitAnd, Not};
+use std::{
+    borrow::Cow,
+    fmt,
+    ops::{BitAnd, Not},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Cube<const IL: usize, const OL: usize> {
@@ -93,6 +97,16 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         let output = [true; OL];
 
         Self { input, output }
+    }
+
+    #[inline]
+    pub fn matrix_display(&self) -> CubeMatrixDisplay<'_, IL, OL> {
+        CubeMatrixDisplay::new(self)
+    }
+
+    #[inline]
+    pub fn algebraic_display(&self) -> CubeAlgebraicDisplay<'_, IL, OL> {
+        CubeAlgebraicDisplay::new(self)
     }
 
     pub fn contains(&self, other: &Cube<IL, OL>) -> bool {
@@ -494,6 +508,193 @@ impl CubeContains {
             (false, true) => CubeContains::DoesNotContain,
             (true, false) => CubeContains::Strictly,
             (true, true) => CubeContains::Contains,
+        }
+    }
+}
+
+pub struct CubeMatrixDisplay<'a, const IL: usize, const OL: usize> {
+    cube: &'a Cube<IL, OL>,
+    format: MatrixDisplayFormat,
+    internal_separator: Cow<'a, str>,
+    input_output_separator: Cow<'a, str>,
+}
+
+impl<'a, const IL: usize, const OL: usize> CubeMatrixDisplay<'a, IL, OL> {
+    pub fn new(cube: &'a Cube<IL, OL>) -> Self {
+        Self {
+            cube,
+            format: MatrixDisplayFormat::default(),
+            internal_separator: Cow::Borrowed(""),
+            input_output_separator: Cow::Borrowed(" | "),
+        }
+    }
+
+    pub fn with_format(mut self, format: MatrixDisplayFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    pub fn with_internal_separator(mut self, separator: impl Into<Cow<'a, str>>) -> Self {
+        self.internal_separator = separator.into();
+        self
+    }
+
+    pub fn with_input_output_separator(mut self, separator: impl Into<Cow<'a, str>>) -> Self {
+        self.input_output_separator = separator.into();
+        self
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> fmt::Display for CubeMatrixDisplay<'a, IL, OL> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for (input_ix, &input) in self.cube.input.iter().enumerate() {
+            write!(f, "{}", self.format.char_for_input(input))?;
+            if input_ix < IL - 1 {
+                write!(f, "{}", self.internal_separator)?;
+            }
+        }
+
+        if IL > 0 && OL > 0 {
+            write!(f, "{}", self.input_output_separator)?;
+        }
+
+        for (output_ix, &output) in self.cube.output.iter().enumerate() {
+            write!(f, "{}", self.format.char_for_output(output))?;
+            if output_ix < OL - 1 {
+                write!(f, "{}", self.internal_separator)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum MatrixDisplayFormat {
+    /// Display a cover using the format `100-1 | 10`, with dashes representing the
+    /// don't care set.
+    Dashes,
+
+    /// Display a cover using the format `10021 | 43`, with numeric identifiers
+    /// representing the don't care set.
+    Numeric,
+}
+
+impl MatrixDisplayFormat {
+    /// Returns the character that would be displayed for an input.
+    pub fn char_for_input(self, input: Option<bool>) -> char {
+        match input {
+            Some(true) => '1',
+            Some(false) => '0',
+            None => match self {
+                Self::Dashes => '-',
+                Self::Numeric => '2',
+            },
+        }
+    }
+
+    /// Returns the character that would be displayed for an output.
+    pub fn char_for_output(self, output: bool) -> char {
+        match (self, output) {
+            (Self::Dashes, true) => '1',
+            (Self::Dashes, false) => '0',
+            (Self::Numeric, true) => '4',
+            (Self::Numeric, false) => '3',
+        }
+    }
+}
+
+impl Default for MatrixDisplayFormat {
+    fn default() -> Self {
+        Self::Dashes
+    }
+}
+
+pub struct CubeAlgebraicDisplay<'a, const IL: usize, const OL: usize> {
+    cube: &'a Cube<IL, OL>,
+}
+
+impl<'a, const IL: usize, const OL: usize> CubeAlgebraicDisplay<'a, IL, OL> {
+    pub fn new(cube: &'a Cube<IL, OL>) -> Self {
+        Self { cube }
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> fmt::Display for CubeAlgebraicDisplay<'a, IL, OL> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if OL != 0 {
+            for output_ix in 0..OL {
+                match self.cube.output[output_ix] {
+                    true => write!(f, "{}", AlgebraicSymbol::output(output_ix))?,
+                    false => write!(f, "{}'", AlgebraicSymbol::output(output_ix))?,
+                }
+            }
+
+            write!(f, " = ")?;
+        }
+
+        for input_ix in 0..IL {
+            match self.cube.input[input_ix] {
+                Some(true) => write!(f, "{}", AlgebraicSymbol::input(input_ix))?,
+                Some(false) => write!(f, "{}'", AlgebraicSymbol::input(input_ix))?,
+                None => {}
+            };
+        }
+
+        Ok(())
+    }
+}
+
+const INPUT_ALGEBRAIC_SYMBOLS: [char; 26] = [
+    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+    't', 'u', 'v', 'w', 'x', 'y', 'z',
+];
+
+const OUTPUT_ALGEBRAIC_SYMBOLS: [char; 26] = [
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+];
+
+#[derive(Debug)]
+pub(crate) enum AlgebraicSymbol {
+    Char(char),
+    String(String),
+}
+
+impl AlgebraicSymbol {
+    #[inline]
+    pub(crate) fn input(input_ix: usize) -> Self {
+        Self::compute(input_ix, &INPUT_ALGEBRAIC_SYMBOLS)
+    }
+
+    #[inline]
+    pub(crate) fn output(output_ix: usize) -> Self {
+        Self::compute(output_ix, &OUTPUT_ALGEBRAIC_SYMBOLS)
+    }
+
+    fn compute(ix: usize, table: &[char; 26]) -> Self {
+        if ix < 26 {
+            return Self::Char(table[ix]);
+        }
+        let rest = ix / 26;
+        let last = ix % 26;
+        let last_ch = INPUT_ALGEBRAIC_SYMBOLS[last];
+
+        match Self::input(rest) {
+            Self::Char(ch) => Self::String(format!("{}{}", ch, last_ch)),
+            Self::String(mut s) => {
+                s.push(last_ch);
+                Self::String(s)
+            }
+        }
+    }
+}
+
+impl fmt::Display for AlgebraicSymbol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Char(ch) => write!(f, "{}", *ch),
+            Self::String(s) => write!(f, "{}", s),
         }
     }
 }

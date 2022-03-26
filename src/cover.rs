@@ -1,11 +1,16 @@
 // Copyright (c) The logic-min Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::{cube::Cube, errors::InvalidCubeNumeric};
+use crate::{
+    cube::{AlgebraicSymbol, Cube, MatrixDisplayFormat},
+    errors::InvalidCubeNumeric,
+};
 use arrayvec::ArrayVec;
-use itertools::Itertools;
+use itertools::{Itertools, Position};
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
+    fmt,
     ops::{BitAnd, BitOr},
 };
 
@@ -66,6 +71,16 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     }
 
     #[inline]
+    pub fn matrix_display(&self) -> CoverMatrixDisplay<'_, IL, OL> {
+        CoverMatrixDisplay::new(self)
+    }
+
+    #[inline]
+    pub fn algebraic_display(&self) -> CoverAlgebraicDisplay<'_, IL, OL> {
+        CoverAlgebraicDisplay::new(self)
+    }
+
+    #[inline]
     pub fn try_into_cubeset0(self) -> Result<Cover<IL, 0>, Cover<IL, OL>> {
         if OL == 0 {
             // SAFETY: `BTreeSet<IL, 0>` has exactly the same layout as `BTreeSet<IL, OL>` when OL
@@ -77,7 +92,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     }
 
     #[inline]
-    pub fn try_as_cubeset0(&self) -> Option<&Cover<IL, 0>> {
+    pub fn try_as_cover0(&self) -> Option<&Cover<IL, 0>> {
         if OL == 0 {
             // SAFETY: `BTreeSet<IL, 0>` has exactly the same layout as `BTreeSet<IL, OL>` when OL
             // == 0
@@ -121,7 +136,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 
     pub fn is_tautology(&self) -> bool {
         // TODO: unate reduction/component reduction
-        match self.try_as_cubeset0() {
+        match self.try_as_cover0() {
             Some(cover0) => cover0.is_tautology0(),
             None => {
                 // Check that each output component is tautological.
@@ -137,7 +152,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     }
 
     pub fn check_logically_equivalent(&self, other: &Self) -> Result<(), [bool; IL]> {
-        match (self.try_as_cubeset0(), other.try_as_cubeset0()) {
+        match (self.try_as_cover0(), other.try_as_cover0()) {
             (Some(self0), Some(other0)) => self0.check_logically_equivalent0(other0),
             (None, None) => {
                 // TODO: benchmark against breaking up separately
@@ -325,7 +340,7 @@ impl<const IL: usize> Cover<IL, 0> {
             return false;
         }
 
-        // The tautological cube is present in this cube set.
+        // The tautological cube is present in this cover.
         if self.elements.contains(&Cube::total_universe()) {
             return true;
         }
@@ -349,7 +364,7 @@ impl<const IL: usize> Cover<IL, 0> {
                 }
             }
 
-            // The cube set should have both 0s and 1s.
+            // The cover should have both 0s and 1s.
             if !(any_0s && any_1s) {
                 return false;
             }
@@ -438,7 +453,7 @@ impl<'b, const IL: usize, const OL: usize> BitOr<Cover<IL, OL>> for &'b Cover<IL
 }
 
 impl<const IL: usize> Cover<IL, 0> {
-    /// Basic algorithm to simplify a single-output cube set.
+    /// Basic algorithm to simplify a single-output cover.
     pub fn simplify_basic(self) -> Self {
         match self.make_unate_or_select_binate() {
             Ok(unate_set) => unate_set.simplify().into_inner(),
@@ -493,7 +508,7 @@ impl<const IL: usize, const OL: usize> UnateCover<IL, OL> {
         })
     }
 
-    /// Simplifies a unate cube set by removing any elements that are contained in other elements.
+    /// Simplifies a unate cover by removing any elements that are contained in other elements.
     pub fn simplify(&self) -> Self {
         let inner = self.inner.single_cube_containment();
         // The monotonicity of the simplified set matches that of the original set.
@@ -625,6 +640,151 @@ impl<const IL: usize, const OL: usize> ShannonExpansion<IL, OL> {
 
         (&self.pos_half_space & new_pos) | (&self.neg_half_space & new_neg) | intersection
     }
+}
+
+// ---
+// Displayers
+// ---
+
+#[derive(Clone, Debug)]
+pub struct CoverMatrixDisplay<'a, const IL: usize, const OL: usize> {
+    cover: &'a Cover<IL, OL>,
+    format: MatrixDisplayFormat,
+    internal_separator: Cow<'a, str>,
+    input_output_separator: Cow<'a, str>,
+    cube_separator: (Cow<'a, str>, bool),
+}
+
+impl<'a, const IL: usize, const OL: usize> CoverMatrixDisplay<'a, IL, OL> {
+    pub fn new(cover: &'a Cover<IL, OL>) -> Self {
+        Self {
+            cover,
+            format: MatrixDisplayFormat::default(),
+            internal_separator: Cow::Borrowed(""),
+            input_output_separator: Cow::Borrowed(" | "),
+            cube_separator: (Cow::Borrowed("\n"), true),
+        }
+    }
+
+    pub fn with_format(mut self, format: MatrixDisplayFormat) -> Self {
+        self.format = format;
+        self
+    }
+
+    pub fn with_internal_separator(mut self, separator: impl Into<Cow<'a, str>>) -> Self {
+        self.internal_separator = separator.into();
+        self
+    }
+
+    pub fn with_input_output_separator(mut self, separator: impl Into<Cow<'a, str>>) -> Self {
+        self.input_output_separator = separator.into();
+        self
+    }
+
+    pub fn with_cube_separator(
+        mut self,
+        separator: impl Into<Cow<'a, str>>,
+        print_last: bool,
+    ) -> Self {
+        self.cube_separator = (separator.into(), print_last);
+        self
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> fmt::Display for CoverMatrixDisplay<'a, IL, OL> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let cube_count = self.cover.cube_count();
+        for (elem_ix, elem) in self.cover.elements.iter().enumerate() {
+            let cube_display = elem
+                .matrix_display()
+                .with_format(self.format)
+                .with_internal_separator(&*self.internal_separator)
+                .with_input_output_separator(&*self.input_output_separator);
+            write!(f, "{}", cube_display)?;
+
+            let (cube_separator, print_last) = &self.cube_separator;
+            if *print_last || elem_ix < cube_count - 1 {
+                write!(f, "{}", cube_separator)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct CoverAlgebraicDisplay<'a, const IL: usize, const OL: usize> {
+    cover: &'a Cover<IL, OL>,
+    separator: (Cow<'a, str>, bool),
+}
+
+impl<'a, const IL: usize, const OL: usize> CoverAlgebraicDisplay<'a, IL, OL> {
+    pub fn new(cover: &'a Cover<IL, OL>) -> Self {
+        Self {
+            cover,
+            separator: (Cow::Borrowed("\n"), true),
+        }
+    }
+
+    pub fn with_separator(mut self, separator: impl Into<Cow<'a, str>>, print_last: bool) -> Self {
+        self.separator = (separator.into(), print_last);
+        self
+    }
+}
+
+impl<'a, const IL: usize, const OL: usize> fmt::Display for CoverAlgebraicDisplay<'a, IL, OL> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.cover.try_as_cover0() {
+            Some(cover0) => display0_borrowed(cover0.elements.iter(), f),
+            None => {
+                let (separator, print_last) = &self.separator;
+                // For each output value, print out the corresponding cubes in the component.
+                for output_ix in 0..OL {
+                    write!(f, "{} = ", AlgebraicSymbol::output(output_ix))?;
+                    display0_owned(self.cover.output_component(output_ix), f)?;
+                    if output_ix < OL - 1 || *print_last {
+                        write!(f, "{}", separator)?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn display0_borrowed<'a, const IL: usize>(
+    elements: impl IntoIterator<Item = &'a Cube<IL, 0>>,
+    f: &mut fmt::Formatter,
+) -> fmt::Result {
+    let elements = elements.into_iter().with_position();
+    for elem in elements {
+        match elem {
+            Position::First(cube) | Position::Middle(cube) => {
+                write!(f, "{} + ", cube.algebraic_display())?;
+            }
+            Position::Last(cube) | Position::Only(cube) => {
+                write!(f, "{}", cube.algebraic_display())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn display0_owned<'a, const IL: usize>(
+    elements: impl IntoIterator<Item = Cube<IL, 0>>,
+    f: &mut fmt::Formatter,
+) -> fmt::Result {
+    let elements = elements.into_iter().with_position();
+    for elem in elements {
+        match elem {
+            Position::First(cube) | Position::Middle(cube) => {
+                write!(f, "{} + ", cube.algebraic_display())?;
+            }
+            Position::Last(cube) | Position::Only(cube) => {
+                write!(f, "{}", cube.algebraic_display())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
