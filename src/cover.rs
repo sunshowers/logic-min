@@ -96,7 +96,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
         if OL == 0 {
             // SAFETY: `BTreeSet<IL, 0>` has exactly the same layout as `BTreeSet<IL, OL>` when OL
             // == 0
-            Some(unsafe { std::mem::transmute::<&Cover<IL, OL>, &Cover<IL, 0>>(self) })
+            Some(unsafe { &*(self as *const Cover<IL, OL> as *const Cover<IL, 0>) })
         } else {
             None
         }
