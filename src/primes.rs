@@ -1,9 +1,10 @@
 // Copyright (c) The logic-min Contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::cube::{Cube, CubeSet};
+use crate::cover::Cover;
+use crate::cube::Cube;
 
-impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
+impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     /// Given a cube, generates prime implicants for that cube.
     pub fn prime_implicants(self) -> Self {
         println!("computing prime implicants for: {:?}", self);
@@ -14,7 +15,7 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
         // If this is a tautology, return the tautological set (total universe).
         if self.is_tautology() {
             println!("*** is tautology");
-            return CubeSet::new([Cube::total_universe()]);
+            return Cover::new([Cube::total_universe()]);
         }
 
         match self.make_unate_or_select_binate() {
@@ -22,12 +23,12 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
                 // The prime implicants are simply unate_set.simplify().
                 unate_set.simplify().into_inner()
             }
-            Err((cube_set, max_binate_ix)) => {
-                let mut expansion = cube_set.shannon_expansion(max_binate_ix);
+            Err((cover, max_binate_ix)) => {
+                let mut expansion = cover.shannon_expansion(max_binate_ix);
                 println!("max binate ix: {}", max_binate_ix);
-                expansion.transform(|cube_set| {
-                    println!("computing prime implicants for half-set: {:?}", cube_set);
-                    cube_set.prime_implicants()
+                expansion.transform(|cover| {
+                    println!("computing prime implicants for half-set: {:?}", cover);
+                    cover.prime_implicants()
                 });
 
                 let pos_result = expansion.pos_half_space() & expansion.positive();
@@ -44,13 +45,12 @@ impl<const IL: usize, const OL: usize> CubeSet<IL, OL> {
 
 #[cfg(test)]
 mod tests {
-    use crate::cube::CubeSet;
+    use super::*;
 
     #[test]
     fn test_basic() {
-        let cube_set =
-            CubeSet::from_numeric0([[0, 2, 1], [0, 1, 2], [0, 1, 1], [1, 2, 1], [1, 2, 0]])
-                .unwrap();
-        println!("{:?}", cube_set.prime_implicants());
+        let cover =
+            Cover::from_numeric0([[0, 2, 1], [0, 1, 2], [0, 1, 1], [1, 2, 1], [1, 2, 0]]).unwrap();
+        println!("{:?}", cover.prime_implicants());
     }
 }
