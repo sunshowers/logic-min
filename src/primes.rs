@@ -51,7 +51,7 @@ mod tests {
         let cover =
             Cover::from_numeric0([[0, 2, 1], [0, 1, 2], [0, 1, 1], [1, 2, 1], [1, 2, 0]]).unwrap();
         assert_eq!(
-            cover.prime_implicants(),
+            cover.clone().prime_implicants(),
             Cover::from_numeric0([[1, 2, 2], [2, 1, 2], [2, 2, 1]]).unwrap()
         );
     }

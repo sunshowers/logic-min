@@ -110,6 +110,13 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         CubeAlgebraicDisplay::new(self)
     }
 
+    pub fn as_input_cube(&self) -> &Cube<IL, 0> {
+        // SAFETY: #[repr(C)] means that the struct must begin with the first field (self.input, no
+        // padding) and that the fields aren't reordered.. Thanks to @at_tcsc for the explanation:
+        // https://twitter.com/at_tcsc/status/1507873517823352832
+        unsafe { &*(&self.input as *const [Option<bool>; IL] as *const Cube<IL, 0>) }
+    }
+
     pub fn contains(&self, other: &Cube<IL, OL>) -> bool {
         let input_contains = self
             .input

@@ -9,6 +9,7 @@ use arrayvec::ArrayVec;
 use itertools::{Itertools, Position};
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     collections::BTreeSet,
     fmt,
     ops::{BitAnd, BitOr},
@@ -103,7 +104,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     }
 
     /// Returns the part of this [`Cover`] which resolves to true for the given input.
-    pub fn output_component(&self, output_ix: usize) -> impl Iterator<Item = Cube<IL, 0>> + '_ {
+    pub fn output_component(&self, output_ix: usize) -> impl Iterator<Item = &Cube<IL, 0>> + '_ {
         assert!(
             output_ix < OL,
             "output ix {} must be in range 0..{}",
@@ -112,7 +113,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
         );
         self.elements
             .iter()
-            .filter_map(move |elem| elem.output[output_ix].then(|| Cube::new0(elem.input)))
+            .filter_map(move |elem| elem.output[output_ix].then(|| elem.as_input_cube()))
     }
 
     /// Returns the result of evaluating all the output values against the input value.
@@ -141,7 +142,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             None => {
                 // Check that each output component is tautological.
                 for output_ix in 0..OL {
-                    let component = Cover::new(self.output_component(output_ix));
+                    let component = Cover::new(self.output_component(output_ix).cloned());
                     if !component.is_tautology0() {
                         return false;
                     }
@@ -747,13 +748,13 @@ impl<'a, const IL: usize, const OL: usize> CoverAlgebraicDisplay<'a, IL, OL> {
 impl<'a, const IL: usize, const OL: usize> fmt::Display for CoverAlgebraicDisplay<'a, IL, OL> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.cover.try_as_cover0() {
-            Some(cover0) => display0_borrowed(cover0.elements.iter(), f),
+            Some(cover0) => algebraic_display0(cover0.elements.iter().collect(), f),
             None => {
                 let (separator, print_last) = &self.separator;
                 // For each output value, print out the corresponding cubes in the component.
                 for output_ix in 0..OL {
                     write!(f, "{} = ", AlgebraicSymbol::output(output_ix))?;
-                    display0_owned(self.cover.output_component(output_ix), f)?;
+                    algebraic_display0(self.cover.output_component(output_ix).collect(), f)?;
                     if output_ix < OL - 1 || *print_last {
                         write!(f, "{}", separator)?;
                     }
@@ -764,30 +765,27 @@ impl<'a, const IL: usize, const OL: usize> fmt::Display for CoverAlgebraicDispla
     }
 }
 
-fn display0_borrowed<'a, const IL: usize>(
-    elements: impl IntoIterator<Item = &'a Cube<IL, 0>>,
+fn algebraic_display0<const IL: usize>(
+    mut elements: Vec<&Cube<IL, 0>>,
     f: &mut fmt::Formatter,
 ) -> fmt::Result {
-    let elements = elements.into_iter().with_position();
-    for elem in elements {
-        match elem {
-            Position::First(cube) | Position::Middle(cube) => {
-                write!(f, "{} + ", cube.algebraic_display())?;
-            }
-            Position::Last(cube) | Position::Only(cube) => {
-                write!(f, "{}", cube.algebraic_display())?;
+    // Sort the elements lexicographically in the order [Some(true), Some(false), None],
+    // This results in minterms starting with `a` showing up first, then `a'`, then
+    // minterms not containing a.
+    elements.sort_unstable_by(|a, b| {
+        for input_ix in 0..IL {
+            match (a.input[input_ix], b.input[input_ix]) {
+                (Some(true), Some(true)) | (Some(false), Some(false)) | (None, None) => continue,
+                (Some(true), Some(false) | None) => return Ordering::Less,
+                (Some(false) | None, Some(true)) => return Ordering::Greater,
+                (Some(false), None) => return Ordering::Less,
+                (None, Some(false)) => return Ordering::Greater,
             }
         }
-    }
-    Ok(())
-}
+        Ordering::Equal
+    });
 
-fn display0_owned<'a, const IL: usize>(
-    elements: impl IntoIterator<Item = Cube<IL, 0>>,
-    f: &mut fmt::Formatter,
-) -> fmt::Result {
-    let elements = elements.into_iter().with_position();
-    for elem in elements {
+    for elem in elements.into_iter().with_position() {
         match elem {
             Position::First(cube) | Position::Middle(cube) => {
                 write!(f, "{} + ", cube.algebraic_display())?;
