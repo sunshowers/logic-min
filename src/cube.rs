@@ -9,6 +9,7 @@ use std::{
     ops::{BitAnd, Not},
 };
 
+#[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Cube<const IL: usize, const OL: usize> {
     pub input: [Option<bool>; IL],
@@ -286,7 +287,7 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
     }
 
     pub fn is_implicant_of(&self, cover: &Cover<IL, OL>) -> bool {
-        (self & cover).is_empty()
+        self.intersect_cover_iter(cover).next().is_none()
     }
 
     pub fn cofactor(&self, p: &Self) -> Option<Self> {
@@ -431,7 +432,14 @@ impl<'b, const IL: usize, const OL: usize> BitAnd<Cover<IL, OL>> for &'b Cube<IL
 
 impl<const IL: usize, const OL: usize> Cube<IL, OL> {
     fn intersect_cover_impl(&self, cover: &Cover<IL, OL>) -> Cover<IL, OL> {
-        Cover::new(cover.elements.iter().filter_map(|c| self & c))
+        Cover::new(self.intersect_cover_iter(cover))
+    }
+
+    fn intersect_cover_iter<'a>(
+        &'a self,
+        cover: &'a Cover<IL, OL>,
+    ) -> impl Iterator<Item = Cube<IL, OL>> + 'a {
+        cover.elements.iter().filter_map(move |c| self & c)
     }
 }
 
