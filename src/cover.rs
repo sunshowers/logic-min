@@ -673,7 +673,7 @@ impl<'a, const IL: usize, const OL: usize> CoverMatrixDisplay<'a, IL, OL> {
         Self {
             cover,
             format: MatrixDisplayFormat::default(),
-            internal_separator: Cow::Borrowed(""),
+            internal_separator: Cow::Borrowed(" "),
             input_output_separator: Cow::Borrowed(" | "),
             cube_separator: (Cow::Borrowed("\n"), true),
         }
