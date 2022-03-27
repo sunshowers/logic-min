@@ -270,7 +270,10 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             .elements
             .iter()
             .cartesian_product(&other.elements)
-            .filter_map(|(c, d)| c.consensus(d))
+            .filter_map(|(c, d)| {
+                let res = c.consensus(d);
+                res
+            })
             .collect();
         Self { elements }
     }
@@ -533,6 +536,16 @@ impl<const IL: usize, const OL: usize> UnateCover<IL, OL> {
     #[inline]
     pub fn into_inner(self) -> Cover<IL, OL> {
         self.inner
+    }
+
+    #[inline]
+    pub fn matrix_display(&self) -> CoverMatrixDisplay<'_, IL, OL> {
+        self.inner.matrix_display()
+    }
+
+    #[inline]
+    pub fn algebraic_display(&self) -> CoverAlgebraicDisplay<'_, IL, OL> {
+        self.inner.algebraic_display()
     }
 }
 
@@ -833,6 +846,13 @@ mod tests {
         assert!(
             !all_zeroes_column_multi2.is_tautology(),
             "column with all zeroes (multi2) is not tautological"
+        );
+
+        let single_column_input_dependence =
+            Cover::from_numeric0([[2, 2, 0, 2], [2, 2, 1, 2]]).unwrap();
+        assert!(
+            single_column_input_dependence.is_tautology(),
+            "single column input dependence is a tautology"
         );
     }
 

@@ -157,14 +157,14 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         input_contains && output_contains && any_strictly
     }
 
-    pub fn is_minterm(&self, output_index: usize) -> bool {
-        // TODO: check that output_index is between 0 and usize
+    pub fn is_minterm(&self, output_ix: usize) -> bool {
+        // TODO: check that output_ix is between 0 and usize
         let input_minterm = self.input.iter().all(|&c| c.is_some());
         let output_minterm = {
             self.output
                 .iter()
                 .enumerate()
-                .all(|(idx, &c)| if idx == output_index { c } else { !c })
+                .all(|(idx, &c)| if idx == output_ix { c } else { !c })
         };
         input_minterm && output_minterm
     }
@@ -178,9 +178,40 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
             .count()
     }
 
+    /// Returns the output distance between `self` and `other`.
+    ///
+    /// The output distance is defined as 1 if for every output variable at index `ix`,
+    /// `self.output[ix] && other.output[ix]` is false.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use logic_min::cube::Cube;
+    ///
+    /// let cube1 = Cube::from_numeric([0, 1, 2], [3, 4]).unwrap();
+    /// let cube2 = Cube::from_numeric([0, 1, 2], [4, 3]).unwrap();
+    /// let cube3 = Cube::from_numeric([0, 1, 2], [4, 4]).unwrap();
+    ///
+    /// assert_eq!(cube1.output_distance(&cube2), 1);
+    /// assert_eq!(cube1.output_distance(&cube3), 0);
+    /// ```
+    ///
+    /// If other is 0, `output_distance` is 0.
+    ///
+    /// ```
+    /// use logic_min::cube::Cube;
+    ///
+    /// let cube1 = Cube::from_numeric0([0, 1, 2]).unwrap();
+    /// let cube2 = Cube::from_numeric0([2, 1, 0]).unwrap();
+    ///
+    /// assert_eq!(cube1.output_distance(&cube2), 0);
+    /// ```
     pub fn output_distance(&self, other: &Cube<IL, OL>) -> usize {
         // page 25
-        if self
+        if OL == 0 {
+            // Special case -- no outputs means the output distance is 0.
+            0
+        } else if self
             .output
             .iter()
             .zip(&other.output)
@@ -400,7 +431,6 @@ impl<'b, const IL: usize, const OL: usize> BitAnd<Cover<IL, OL>> for &'b Cube<IL
 
 impl<const IL: usize, const OL: usize> Cube<IL, OL> {
     fn intersect_cover_impl(&self, cover: &Cover<IL, OL>) -> Cover<IL, OL> {
-        println!("** intersecting {:?} with {:?}", self, cover);
         Cover::new(cover.elements.iter().filter_map(|c| self & c))
     }
 }
