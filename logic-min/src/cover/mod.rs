@@ -4,6 +4,7 @@
 mod cover_impl;
 mod display;
 mod primes;
+mod tautology;
 
 pub use cover_impl::*;
 pub use display::*;
