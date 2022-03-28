@@ -5,3 +5,5 @@ pub mod cover;
 pub mod cube;
 pub mod errors;
 pub mod logic_function;
+#[cfg(feature = "proptest1")]
+mod proptest_helpers;
