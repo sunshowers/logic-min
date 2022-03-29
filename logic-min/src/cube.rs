@@ -569,8 +569,8 @@ impl<'a, const IL: usize, const OL: usize> CubeMatrixDisplay<'a, IL, OL> {
         Self {
             cube,
             format: MatrixDisplayFormat::default(),
-            internal_separator: Cow::Borrowed(" "),
-            input_output_separator: Cow::Borrowed(" | "),
+            internal_separator: Cow::Borrowed(""),
+            input_output_separator: Cow::Borrowed("|"),
         }
     }
 
