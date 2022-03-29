@@ -20,6 +20,23 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             }
         }
     }
+
+    #[cfg(test)]
+    fn is_tautology_exhaustive(&self) -> bool {
+        match self.try_as_cover0() {
+            Some(cover0) => cover0.is_tautology0_exhaustive(),
+            None => {
+                // Check that each output component is tautological.
+                for output_ix in 0..OL {
+                    let component = Cover::new(self.output_component(output_ix).cloned());
+                    if !component.is_tautology0_exhaustive() {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    }
 }
 
 impl<const IL: usize> Cover<IL, 0> {
@@ -62,6 +79,10 @@ impl<const IL: usize> Cover<IL, 0> {
         // TODO: deficient vertex count.
 
         // TODO: splitting and reduction -- this is just a truth table search for now.
+        self.is_tautology0_exhaustive()
+    }
+
+    fn is_tautology0_exhaustive(&self) -> bool {
         for input_bits in 0..2_u32.pow(IL as u32) {
             let mut values = [false; IL];
             for bit in 0..IL {
@@ -80,6 +101,7 @@ impl<const IL: usize> Cover<IL, 0> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_tautology_basic() {
@@ -131,5 +153,16 @@ mod tests {
             single_column_input_dependence.is_tautology(),
             "single column input dependence is a tautology"
         );
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_tautology(cover: Cover<8, 4>) {
+            prop_assert_eq!(
+                cover.is_tautology(),
+                cover.is_tautology_exhaustive(),
+                "tautology matches exhaustive search",
+            );
+        }
     }
 }
