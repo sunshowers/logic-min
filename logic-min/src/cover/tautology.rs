@@ -5,20 +5,53 @@ use crate::{cover::Cover, cube::Cube};
 
 impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     pub fn is_tautology(&self) -> bool {
-        // TODO: unate reduction/component reduction
-        match self.try_as_cover0() {
-            Some(cover0) => cover0.is_tautology0(),
-            None => {
-                // Check that each output component is tautological.
-                for output_ix in 0..OL {
-                    let component = Cover::new(self.output_component(output_ix).cloned());
-                    if !component.is_tautology0() {
-                        return false;
+        // The empty cover is not a tautology.
+        let elements = self.elements();
+
+        if elements.is_empty() {
+            return false;
+        }
+
+        // Scan through the cover looking for rows where all the inputs are Nones. If all the
+        // outputs are covered by such rows, this is a tautology.
+        if OL == 0 {
+            if elements.contains(&Cube::<IL, OL>::total_universe()) {
+                return true;
+            }
+        } else {
+            let mut output_bits = [false; OL];
+            for cube in elements {
+                if cube.input.iter().all(|i| i.is_none()) {
+                    for output_ix in 0..OL {
+                        output_bits[output_ix] |= cube.output[output_ix];
                     }
                 }
-                true
+            }
+            if output_bits.iter().all(|bit| *bit) {
+                return true;
             }
         }
+
+        let meaningful_count = self.meaningful_input_count();
+        if meaningful_count <= 7 {
+            let mut values = [false; 7];
+            for input_bits in 0..2_u32.pow(meaningful_count as u32) {
+                for bit in 0..meaningful_count {
+                    values[bit] = (input_bits >> bit) & 1 == 1;
+                }
+                if self
+                    .evaluate_meaningful(&values[0..meaningful_count])
+                    .iter()
+                    .any(|x| !*x)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // TODO: unate reduction/component reduction
+        panic!("unimplemented")
     }
 
     #[cfg(test)]
@@ -42,12 +75,14 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 impl<const IL: usize> Cover<IL, 0> {
     pub fn is_tautology0(&self) -> bool {
         // The empty cube is not a tautology.
-        if self.elements.is_empty() {
+        if self.is_empty() {
             return false;
         }
 
+        let elements = self.elements();
+
         // The tautological cube is present in this cover.
-        if self.elements.contains(&Cube::total_universe()) {
+        if elements.contains(&Cube::total_universe()) {
             return true;
         }
 
@@ -55,7 +90,7 @@ impl<const IL: usize> Cover<IL, 0> {
         'outer: for input_ix in 0..IL {
             let mut any_0s = false;
             let mut any_1s = false;
-            for elem in &self.elements {
+            for elem in elements {
                 match elem.input[input_ix] {
                     Some(true) => {
                         any_1s = true;

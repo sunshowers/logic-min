@@ -6,27 +6,29 @@ use crate::{
     cube::Cube,
     errors::InvalidCubeNumeric,
 };
-use arrayvec::ArrayVec;
 use itertools::Itertools;
 use std::{
     collections::BTreeSet,
     ops::{BitAnd, BitOr},
 };
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+use super::caches::{ColumnData, CoverCache};
+
+#[derive(Clone, Debug, Default)]
 pub struct Cover<const IL: usize, const OL: usize> {
-    pub elements: BTreeSet<Cube<IL, OL>>,
+    elements: CoverElements<IL, OL>,
+    cache: CoverCache<IL, OL>,
 }
 
 impl<const IL: usize> Cover<IL, 0> {
     pub fn from_numeric0(
         numeric: impl IntoIterator<Item = [u8; IL]>,
     ) -> Result<Self, InvalidCubeNumeric> {
-        let elements = numeric
+        let elements: BTreeSet<_> = numeric
             .into_iter()
             .map(|input| Cube::from_numeric0(input))
             .collect::<Result<_, _>>()?;
-        Ok(Self { elements })
+        Ok(Self::new(elements))
     }
 }
 
@@ -36,37 +38,57 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 
     pub fn new(elements: impl IntoIterator<Item = Cube<IL, OL>>) -> Self {
         Self {
-            elements: elements.into_iter().collect(),
+            elements: CoverElements(elements.into_iter().collect()),
+            cache: CoverCache::default(),
         }
     }
 
     pub fn from_numeric(
         numeric: impl IntoIterator<Item = ([u8; IL], [u8; OL])>,
     ) -> Result<Self, InvalidCubeNumeric> {
-        let elements = numeric
+        let elements: BTreeSet<_> = numeric
             .into_iter()
             .map(|(input, output)| Cube::from_numeric(input, output))
             .collect::<Result<_, _>>()?;
-        Ok(Self { elements })
+        Ok(Self::new(elements))
     }
 
     pub fn cofactor(&self, p: &Cube<IL, OL>) -> Self {
-        let elements = self
-            .elements
-            .iter()
-            .filter_map(|elem| elem.cofactor(p))
-            .collect();
-        Self { elements }
+        Self::new(self.elements().iter().filter_map(|elem| elem.cofactor(p)))
     }
 
     #[inline]
     pub fn cube_count(&self) -> usize {
-        self.elements.len()
+        self.elements().len()
+    }
+
+    #[inline]
+    pub fn meaningful_input_count(&self) -> usize {
+        self.get_or_init_column_cache().0
+    }
+
+    #[inline]
+    pub fn meaningful_input_ixs(&self) -> impl Iterator<Item = usize> + '_ {
+        self.get_column_data()
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, data)| data.is_meaningful().then(|| ix))
+    }
+
+    #[inline]
+    pub fn elements(&self) -> &BTreeSet<Cube<IL, OL>> {
+        &self.elements.0
+    }
+
+    #[inline]
+    pub fn elements_mut(&mut self) -> &mut BTreeSet<Cube<IL, OL>> {
+        self.cache.invalidate();
+        &mut self.elements.0
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
+        self.elements().is_empty()
     }
 
     #[inline]
@@ -77,17 +99,6 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     #[inline]
     pub fn algebraic_display(&self) -> CoverAlgebraicDisplay<'_, IL, OL> {
         CoverAlgebraicDisplay::new(self)
-    }
-
-    #[inline]
-    pub fn try_into_cubeset0(self) -> Result<Cover<IL, 0>, Cover<IL, OL>> {
-        if OL == 0 {
-            // SAFETY: `BTreeSet<IL, 0>` has exactly the same layout as `BTreeSet<IL, OL>` when OL
-            // == 0
-            Ok(unsafe { std::mem::transmute::<Cover<IL, OL>, Cover<IL, 0>>(self) })
-        } else {
-            Err(self)
-        }
     }
 
     #[inline]
@@ -109,7 +120,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             output_ix,
             OL
         );
-        self.elements
+        self.elements()
             .iter()
             .filter_map(move |elem| elem.output[output_ix].then(|| elem.as_input_cube()))
     }
@@ -130,6 +141,28 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
                 .any(|elem| elem.evaluate0(values));
         }
 
+        res
+    }
+
+    /// Returns the result of evaluating all the output values against the input value, specified in
+    /// terms of meaningful column indexes.
+    ///
+    /// Panics if:
+    /// * the length of the slice is different from `self.meaningful_column_count()`
+    /// * `OL == 0`. Use `evaluate0_meaningful` to get a true/false answer when OL == 0.
+    pub fn evaluate_meaningful(&self, values: &[bool]) -> [bool; OL] {
+        assert_ne!(
+            OL, 0,
+            "output length {} must not be 0 -- use evaluate0_meaningful to get an answer when it is 0",
+            OL
+        );
+        let meaningful_ixs: Vec<_> = self.meaningful_input_ixs().collect();
+        let mut res = [false; OL];
+        for output_ix in 0..OL {
+            res[output_ix] = self
+                .output_component(output_ix)
+                .any(|elem| elem.evaluate0_ixs(values, &meaningful_ixs));
+        }
         res
     }
 
@@ -167,9 +200,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             input_ix,
             IL
         );
-        self.elements
-            .iter()
-            .all(|elem| elem.input[input_ix] != Some(false))
+        self.get_column_data()[input_ix].is_monotone_increasing()
     }
 
     pub fn is_monotone_decreasing(&self, input_ix: usize) -> bool {
@@ -179,9 +210,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             input_ix,
             IL
         );
-        self.elements
-            .iter()
-            .all(|elem| elem.input[input_ix] != Some(true))
+        self.get_column_data()[input_ix].is_monotone_decreasing()
     }
 
     #[inline]
@@ -195,7 +224,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
         // Number of cubes with Some(false) in the jth input position.
         let mut zeroes = [0_u32; IL];
 
-        for elem in &self.elements {
+        for elem in self.elements() {
             for input_ix in 0..IL {
                 match elem.input[input_ix] {
                     Some(true) => ones[input_ix] += 1,
@@ -230,34 +259,30 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     }
 
     pub fn single_cube_containment(&self) -> Self {
-        let simplified: BTreeSet<_> = self
-            .elements
+        let simplified = self
+            .elements()
             .iter()
             .filter(|elem| {
                 let contains = self
-                    .elements
+                    .elements()
                     .iter()
                     .any(|contains| contains.strictly_contains(elem));
                 !contains
             })
-            .cloned()
-            .collect();
-        Self {
-            elements: simplified,
-        }
+            .cloned();
+        Self::new(simplified)
     }
 
     pub fn consensus(&self, other: &Self) -> Self {
         let elements = self
-            .elements
+            .elements()
             .iter()
-            .cartesian_product(&other.elements)
+            .cartesian_product(other.elements())
             .filter_map(|(c, d)| {
                 let res = c.consensus(d);
                 res
-            })
-            .collect();
-        Self { elements }
+            });
+        Self::new(elements)
     }
 
     // ---
@@ -265,42 +290,52 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
     // ---
 
     fn union_impl(&self, other: &Self) -> Self {
-        let elements = self
-            .elements
-            .iter()
-            .chain(&other.elements)
-            .cloned()
-            .collect();
-        Self { elements }
+        let elements = self.elements().iter().chain(other.elements()).cloned();
+        Self::new(elements)
     }
 
     fn intersection_impl(&self, other: &Self) -> Self {
         // page 24
         let elements = self
-            .elements
+            .elements()
             .iter()
-            .cartesian_product(&other.elements)
-            .filter_map(|(c, d)| (c & d))
-            .collect();
-        Self { elements }
+            .cartesian_product(other.elements())
+            .filter_map(|(c, d)| (c & d));
+        Self::new(elements)
     }
 
     fn intersect_and_remove(&mut self, other: &mut Self) -> Self {
         let result: BTreeSet<_> = self
-            .elements
-            .intersection(&other.elements)
+            .elements()
+            .intersection(other.elements())
             .cloned()
             .collect();
-        self.elements.retain(|p| !result.contains(p));
-        other.elements.retain(|p| !result.contains(p));
+        self.elements_mut().retain(|p| !result.contains(p));
+        other.elements_mut().retain(|p| !result.contains(p));
+        Self::new(result)
+    }
 
-        Self { elements: result }
+    #[inline]
+    fn get_column_data(&self) -> &[ColumnData; IL] {
+        self.get_or_init_column_cache().1
+    }
+
+    #[inline]
+    fn get_or_init_column_cache(&self) -> (usize, &[ColumnData; IL]) {
+        self.cache.get_or_init_column_data(self.elements())
     }
 }
 
 impl<const IL: usize> Cover<IL, 0> {
     pub fn evaluate0(&self, values: &[bool; IL]) -> bool {
-        self.elements.iter().any(|elem| elem.evaluate0(values))
+        self.elements().iter().any(|elem| elem.evaluate0(values))
+    }
+
+    pub fn evaluate0_meaningful(&self, values: &[bool]) -> bool {
+        let meaningful_ixs: Vec<_> = self.meaningful_input_ixs().collect();
+        self.elements()
+            .iter()
+            .any(|elem| elem.evaluate0_ixs(values, &meaningful_ixs))
     }
 
     pub fn check_logically_equivalent0(&self, other: &Self) -> Result<(), [bool; IL]> {
@@ -409,10 +444,20 @@ impl<const IL: usize> Cover<IL, 0> {
     }
 }
 
+impl<const IL: usize, const OL: usize> PartialEq for Cover<IL, OL> {
+    fn eq(&self, other: &Self) -> bool {
+        &self.elements == &other.elements
+    }
+}
+
+impl<const IL: usize, const OL: usize> Eq for Cover<IL, OL> {}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct CoverElements<const IL: usize, const OL: usize>(BTreeSet<Cube<IL, OL>>);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnateCover<const IL: usize, const OL: usize> {
     inner: Cover<IL, OL>,
-    monotonicity: [Monotonicity; IL],
 }
 
 impl<const IL: usize, const OL: usize> UnateCover<IL, OL> {
@@ -420,46 +465,25 @@ impl<const IL: usize, const OL: usize> UnateCover<IL, OL> {
     ///
     /// Returns `Err(cover)` if `cover` is not unate.
     pub fn new(cover: Cover<IL, OL>) -> Result<Self, Cover<IL, OL>> {
-        let mut monotonicity: ArrayVec<Monotonicity, IL> = ArrayVec::new();
-        for input_ix in 0..IL {
-            if cover.is_monotone_increasing(input_ix) {
-                monotonicity.push(Monotonicity::Increasing);
-            } else if cover.is_monotone_decreasing(input_ix) {
-                monotonicity.push(Monotonicity::Decreasing);
-            } else {
-                return Err(cover);
-            }
+        let column_data = cover.get_column_data();
+        if !column_data.iter().all(|data| data.is_unate()) {
+            return Err(cover);
         }
 
-        // SAFETY: we push exactly IL elements
-        debug_assert_eq!(monotonicity.len(), monotonicity.capacity());
-        let monotonicity = unsafe { monotonicity.into_inner_unchecked() };
-        Ok(Self {
-            inner: cover,
-            monotonicity,
-        })
+        Ok(Self { inner: cover })
     }
 
     /// Simplifies a unate cover by removing any elements that are contained in other elements.
     pub fn simplify(&self) -> Self {
         let inner = self.inner.single_cube_containment();
-        // The monotonicity of the simplified set matches that of the original set.
-        let monotonicity = self.monotonicity;
 
-        Self {
-            inner,
-            monotonicity,
-        }
+        // The simplification of a unate cover is also unate.
+        Self { inner }
     }
 
     #[inline]
     pub fn as_inner(&self) -> &Cover<IL, OL> {
         &self.inner
-    }
-
-    #[inline]
-    pub fn monotonicity(&self) -> &[Monotonicity; IL] {
-        &self.monotonicity
     }
 
     #[inline]
@@ -476,12 +500,6 @@ impl<const IL: usize, const OL: usize> UnateCover<IL, OL> {
     pub fn algebraic_display(&self) -> CoverAlgebraicDisplay<'_, IL, OL> {
         self.inner.algebraic_display()
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Monotonicity {
-    Decreasing,
-    Increasing,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -548,37 +566,26 @@ impl<const IL: usize, const OL: usize> ShannonExpansion<IL, OL> {
     }
 
     pub fn merge_with_containment(mut self) -> Cover<IL, OL> {
-        println!(
-            "\n\n*** STARTING MERGE WITH CONTAINMENT: pos: {:?}, neg: {:?}, ix: {}",
-            self.positive, self.negative, self.input_ix
-        );
         let mut intersection = self.positive.intersect_and_remove(&mut self.negative);
-
-        println!(
-            "after direct intersection: pos: {:?}\n  neg: {:?}\n  intersection: {:?}",
-            self.positive, self.negative, intersection
-        );
+        let intersection_elements = intersection.elements_mut();
 
         let mut new_pos: Cover<IL, OL> = self.positive.clone();
+        let new_pos_elements = new_pos.elements_mut();
         let mut new_neg: Cover<IL, OL> = self.negative.clone();
+        let new_neg_elements = new_neg.elements_mut();
 
-        for pos_elem in &self.positive.elements {
-            for neg_elem in &self.negative.elements {
+        for pos_elem in self.positive.elements() {
+            for neg_elem in self.negative.elements() {
                 if pos_elem.strictly_contains(neg_elem) {
                     // For some reason rust-analyzer chokes on neg_elem.clone()
-                    intersection.elements.insert(Clone::clone(neg_elem));
-                    new_neg.elements.remove(neg_elem);
+                    intersection_elements.insert(Clone::clone(neg_elem));
+                    new_neg_elements.remove(neg_elem);
                 } else if neg_elem.strictly_contains(pos_elem) {
-                    intersection.elements.insert(Clone::clone(pos_elem));
-                    new_pos.elements.remove(pos_elem);
+                    intersection_elements.insert(Clone::clone(pos_elem));
+                    new_pos_elements.remove(pos_elem);
                 }
             }
         }
-
-        println!(
-            "### after containment: pos: {:?}\n  neg: {:?}\n  intersection: {:?}\n\n",
-            new_pos, new_neg, intersection
-        );
 
         (&self.pos_half_space & new_pos) | (&self.neg_half_space & new_neg) | intersection
     }

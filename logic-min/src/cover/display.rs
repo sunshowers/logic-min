@@ -56,7 +56,7 @@ impl<'a, const IL: usize, const OL: usize> CoverMatrixDisplay<'a, IL, OL> {
 impl<'a, const IL: usize, const OL: usize> fmt::Display for CoverMatrixDisplay<'a, IL, OL> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let cube_count = self.cover.cube_count();
-        for (elem_ix, elem) in self.cover.elements.iter().enumerate() {
+        for (elem_ix, elem) in self.cover.elements().iter().enumerate() {
             let cube_display = elem
                 .matrix_display()
                 .with_format(self.format)
@@ -96,7 +96,7 @@ impl<'a, const IL: usize, const OL: usize> CoverAlgebraicDisplay<'a, IL, OL> {
 impl<'a, const IL: usize, const OL: usize> fmt::Display for CoverAlgebraicDisplay<'a, IL, OL> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.cover.try_as_cover0() {
-            Some(cover0) => algebraic_display0(cover0.elements.iter().collect(), f),
+            Some(cover0) => algebraic_display0(cover0.elements().iter().collect(), f),
             None => {
                 let (separator, print_last) = &self.separator;
                 // For each output value, print out the corresponding cubes in the component.

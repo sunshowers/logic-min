@@ -340,6 +340,25 @@ impl<const IL: usize> Cube<IL, 0> {
         }
         true
     }
+
+    pub fn evaluate0_ixs(&self, values: &[bool], ixs: &[usize]) -> bool {
+        assert_eq!(
+            values.len(),
+            ixs.len(),
+            "values must be the same length as ixs"
+        );
+        for (ix_ix, ix) in ixs.iter().enumerate() {
+            match (self.input[*ix], values[ix_ix]) {
+                (Some(v), value) => {
+                    if v != value {
+                        return false;
+                    }
+                }
+                (None, _) => {}
+            }
+        }
+        true
+    }
 }
 
 /// Complement operation.
@@ -446,7 +465,7 @@ impl<const IL: usize, const OL: usize> Cube<IL, OL> {
         &'a self,
         cover: &'a Cover<IL, OL>,
     ) -> impl Iterator<Item = Cube<IL, OL>> + 'a {
-        cover.elements.iter().filter_map(move |c| self & c)
+        cover.elements().iter().filter_map(move |c| self & c)
     }
 }
 
