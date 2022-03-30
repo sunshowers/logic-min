@@ -12,7 +12,7 @@ use std::{
     ops::{BitAnd, BitOr},
 };
 
-use super::caches::{ColumnData, CoverCache};
+use super::caches::{ColumnData, CoverCache, UnateData};
 
 #[derive(Clone, Default)]
 pub struct Cover<const IL: usize, const OL: usize> {
@@ -64,7 +64,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 
     #[inline]
     pub fn meaningful_input_count(&self) -> usize {
-        self.get_or_init_column_cache().0
+        self.get_or_init_unate_cache().meaningful_input_count
     }
 
     #[inline]
@@ -213,22 +213,69 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
         self.get_column_data()[input_ix].is_monotone_decreasing()
     }
 
+    /// Returns true if this cover is unate in all its inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use logic_min::cover::Cover;
+    ///
+    /// // The empty cover is unate.
+    /// let cover: Cover<8, 4> = Cover::new([]);
+    /// assert!(cover.is_unate());
+    ///
+    /// // A cover where all columns are either 0 or 2, or 1 or 2, is unate.
+    /// let cover = Cover::from_numeric0([
+    ///     [2, 2, 1, 1],
+    ///     [1, 0, 2, 1],
+    /// ]).unwrap();
+    /// assert!(cover.is_unate());
+    ///
+    /// // A cover where at least one column has values both 0 and 1 is not unate.
+    /// let cover = Cover::from_numeric0([
+    ///     [1, 1, 2, 2],
+    ///     [0, 1, 1, 0],
+    /// ]).unwrap();
+    /// assert!(!cover.is_unate(), "column 0 is not unate");
+    /// ```
+    #[inline]
+    pub fn is_unate(&self) -> bool {
+        self.binate_input_count() == 0
+    }
+
+    #[inline]
+    pub fn binate_input_count(&self) -> usize {
+        self.get_or_init_unate_cache().binate_input_count
+    }
+
+    #[inline]
+    pub fn binate_input_ixs(&self) -> impl Iterator<Item = usize> + '_ {
+        self.get_column_data()
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, data)| (!data.is_unate()).then(|| ix))
+    }
+
     #[inline]
     pub fn make_unate(self) -> Result<UnateCover<IL, OL>, Self> {
         UnateCover::new(self)
     }
 
-    pub fn make_unate_or_select_binate(self) -> Result<UnateCover<IL, OL>, (Self, usize)> {
-        // Number of cubes with Some(true) in the jth input position.
-        let mut ones = [0_u32; IL];
-        // Number of cubes with Some(false) in the jth input position.
-        let mut zeroes = [0_u32; IL];
+    pub fn select_binate(&self) -> Option<usize> {
+        if self.is_unate() {
+            return None;
+        }
+
+        let binate_count = self.binate_input_count();
+        let binate_input_ixs: Vec<_> = self.binate_input_ixs().collect();
+        let mut ones = vec![0u32; binate_count];
+        let mut zeroes = vec![0u32; binate_count];
 
         for elem in self.elements() {
-            for input_ix in 0..IL {
+            for (ix_ix, &input_ix) in binate_input_ixs.iter().enumerate() {
                 match elem.input[input_ix] {
-                    Some(true) => ones[input_ix] += 1,
-                    Some(false) => zeroes[input_ix] += 1,
+                    Some(true) => ones[ix_ix] += 1,
+                    Some(false) => zeroes[ix_ix] += 1,
                     None => {}
                 }
             }
@@ -236,26 +283,24 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 
         // TODO: combine this loop and the below one.
 
-        let is_unate = zeroes
-            .iter()
-            .zip(ones.iter())
-            .all(|(&zeroes_j, &ones_j)| zeroes_j == 0 || ones_j == 0);
-        if is_unate {
-            // TODO: compute monotonicity here rather than recomputing it in UnateCover::new
-            return Ok(UnateCover::new(self).expect("we already checked unate"));
-        }
-
-        let max_binate_ix = zeroes
+        let max_ix_ix = zeroes
             .iter()
             .zip(ones.iter())
             .enumerate()
-            .filter_map(|(input_ix, (&zeroes_j, &ones_j))| {
-                (zeroes_j != 0 && ones_j != 0).then(|| (input_ix, zeroes_j + ones_j))
-            })
+            .map(|(ix_ix, (&zeroes_j, &ones_j))| (ix_ix, zeroes_j + ones_j))
             .max_by_key(|(_, binate_val)| *binate_val)
-            .map(|(max_binate_ix, _)| max_binate_ix)
-            .expect("there's at least one input");
-        Err((self, max_binate_ix))
+            .map(|(ix_ix, _)| ix_ix)
+            .expect("at least one binate column");
+        Some(binate_input_ixs[max_ix_ix])
+    }
+
+    pub fn make_unate_or_select_binate(self) -> Result<UnateCover<IL, OL>, (Self, usize)> {
+        self.make_unate().map_err(|cover| {
+            let binate_ix = cover
+                .select_binate()
+                .expect("non-unate cover should pick a binate variable");
+            (cover, binate_ix)
+        })
     }
 
     pub fn single_cube_containment(&self) -> Self {
@@ -317,12 +362,12 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 
     #[inline]
     fn get_column_data(&self) -> &[ColumnData; IL] {
-        self.get_or_init_column_cache().1
+        &self.get_or_init_unate_cache().data
     }
 
     #[inline]
-    fn get_or_init_column_cache(&self) -> (usize, &[ColumnData; IL]) {
-        self.cache.get_or_init_column_data(self.elements())
+    fn get_or_init_unate_cache(&self) -> &UnateData<IL> {
+        self.cache.get_or_init_unate_data(self.elements())
     }
 }
 
@@ -465,8 +510,7 @@ impl<const IL: usize, const OL: usize> UnateCover<IL, OL> {
     ///
     /// Returns `Err(cover)` if `cover` is not unate.
     pub fn new(cover: Cover<IL, OL>) -> Result<Self, Cover<IL, OL>> {
-        let column_data = cover.get_column_data();
-        if !column_data.iter().all(|data| data.is_unate()) {
+        if !cover.is_unate() {
             return Err(cover);
         }
 

@@ -35,16 +35,22 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
         let meaningful_count = self.meaningful_input_count();
         if meaningful_count <= 7 {
             let mut values = [false; 7];
-            for input_bits in 0..2_u32.pow(meaningful_count as u32) {
+            for input_bits in 0..2_u8.pow(meaningful_count as u32) {
                 for bit in 0..meaningful_count {
                     values[bit] = (input_bits >> bit) & 1 == 1;
                 }
-                if self
-                    .evaluate_meaningful(&values[0..meaningful_count])
-                    .iter()
-                    .any(|x| !*x)
-                {
-                    return false;
+                if let Some(cover0) = self.try_as_cover0() {
+                    if !cover0.evaluate0_meaningful(&values[0..meaningful_count]) {
+                        return false;
+                    }
+                } else {
+                    if self
+                        .evaluate_meaningful(&values[0..meaningful_count])
+                        .iter()
+                        .any(|x| !*x)
+                    {
+                        return false;
+                    }
                 }
             }
             return true;
