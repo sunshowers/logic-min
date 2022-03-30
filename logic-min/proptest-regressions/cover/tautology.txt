@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 2359b9bcac21bdddc47afb6d6c8018b88551172e42aa9cf62cb4690079784447 # shrinks to cover = Cover { elements: CoverElements({Cube { input: [None, None, Some(false), Some(false), None, None, None, Some(false)], output: [false, false, false, false] }, Cube { input: [Some(false), Some(false), None, None, Some(false), Some(false), Some(false), None], output: [false, false, false, false] }}), cache: CoverCache { column_data: OnceCell(Uninit), _marker: PhantomData } }
+cc cc1537357bbdf0699605e4f0bfa9614d7eb4565beafd59da6e33b48d3839c25e # shrinks to cover = Cover { A: , B: , C: , D: d' + f', (no outputs): a' + b'c'f + e' + f' + g' + h' +  }

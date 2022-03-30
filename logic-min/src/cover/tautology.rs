@@ -56,8 +56,18 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
             return true;
         }
 
-        // TODO: unate reduction/component reduction
-        panic!("unimplemented")
+        // TODO: unate reduction and component reduction
+
+        let split_ix = match self.select_binate() {
+            Some(binate_ix) => binate_ix,
+            None => {
+                // If a unate cover failed the all-inputs-are-Nones check, it is not a tautology.
+                return false;
+            }
+        };
+
+        let expansion = self.shannon_expansion(split_ix);
+        expansion.positive().is_tautology() && expansion.negative().is_tautology()
     }
 
     #[cfg(test)]
@@ -79,50 +89,7 @@ impl<const IL: usize, const OL: usize> Cover<IL, OL> {
 }
 
 impl<const IL: usize> Cover<IL, 0> {
-    pub fn is_tautology0(&self) -> bool {
-        // The empty cube is not a tautology.
-        if self.is_empty() {
-            return false;
-        }
-
-        let elements = self.elements();
-
-        // The tautological cube is present in this cover.
-        if elements.contains(&Cube::total_universe()) {
-            return true;
-        }
-
-        // There's a column of all 1s or all 0s.
-        'outer: for input_ix in 0..IL {
-            let mut any_0s = false;
-            let mut any_1s = false;
-            for elem in elements {
-                match elem.input[input_ix] {
-                    Some(true) => {
-                        any_1s = true;
-                    }
-                    Some(false) => {
-                        any_0s = true;
-                    }
-                    None => {
-                        // There's a don't care in this column.
-                        continue 'outer;
-                    }
-                }
-            }
-
-            // The cover should have both 0s and 1s.
-            if !(any_0s && any_1s) {
-                return false;
-            }
-        }
-
-        // TODO: deficient vertex count.
-
-        // TODO: splitting and reduction -- this is just a truth table search for now.
-        self.is_tautology0_exhaustive()
-    }
-
+    #[cfg(test)]
     fn is_tautology0_exhaustive(&self) -> bool {
         for input_bits in 0..2_u32.pow(IL as u32) {
             let mut values = [false; IL];
