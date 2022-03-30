@@ -14,7 +14,7 @@ use std::{
 
 use super::caches::{ColumnData, CoverCache};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Cover<const IL: usize, const OL: usize> {
     elements: CoverElements<IL, OL>,
     cache: CoverCache<IL, OL>,
